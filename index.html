@@ -402,6 +402,30 @@ function migrateBacklogModel() {
   if(changed) save(KEYS.backlog, migrated);
 }
 
+function migrateVisibility() {
+  // Add visibility + ownerId to existing data that lacks it
+  const myId = activeViewer();
+  const clients = DB.clients(true);
+  let cc = false;
+  const uc = clients.map(c => { if(c.visibility!==undefined)return c; cc=true; return {...c,visibility:'public',ownerId:myId}; });
+  if(cc) DB.saveClients(uc);
+
+  const times = DB.time();
+  let tc = false;
+  const ut = times.map(e => { if(e.visibility!==undefined)return e; tc=true; return {...e,visibility:'public'}; });
+  if(tc) save(KEYS.timeEntries, ut);
+
+  const exps = DB.exps();
+  let ec = false;
+  const ue = exps.map(e => { if(e.visibility!==undefined)return e; ec=true; return {...e,visibility:'public'}; });
+  if(ec) save(KEYS.expenses, ue);
+
+  const backlog = DB.backlog();
+  let bc = false;
+  const ub = backlog.map(b => { if(b.visibility!==undefined)return b; bc=true; return {...b,visibility:'public',createdBy:b.createdBy||myId}; });
+  if(bc) DB.saveBack(ub);
+}
+
 // ═══════════════════════════════════════════════
 //  APP STATE
 // ═══════════════════════════════════════════════
@@ -411,6 +435,7 @@ const State = {
   timerTick: null,
   expanded: new Set(),
   groomMode: false,
+  dashView: 'personal',   // 'personal' | 'team'
 
   filters: {
     log:      { client:'', project:'', user:'', from:'', to:'' },
@@ -522,6 +547,73 @@ function emptyState(icon, title, sub='') {
 }
 
 // ═══════════════════════════════════════════════
+//  VISIBILITY HELPERS
+// ═══════════════════════════════════════════════
+
+function activeViewer() { return State.activeUser?.id || null; }
+
+// Can the active user see this client at all?
+function canSeeClient(c) {
+  if (!c) return false;
+  if (c.visibility === 'private') return c.ownerId === activeViewer();
+  return true; // 'public' and 'confidential' are visible (masked if confidential)
+}
+
+// Should this client be shown as "Confidential" (visible but masked)?
+function isClientConfidential(c) {
+  return c?.visibility === 'confidential' && c.ownerId !== activeViewer();
+}
+
+// Display name — "Confidential Client" if masked, real name otherwise
+function clientDisplayName(c) {
+  if (!c) return '';
+  if (isClientConfidential(c)) return 'Confidential Client';
+  return c.name || '';
+}
+
+// Can the active user see this time/expense entry?
+function canSeeEntry(entry) {
+  if (!entry) return false;
+  const client = DB.client(entry.clientId);
+  if (client && !canSeeClient(client)) return false;
+  if (entry.visibility === 'private') return entry.userId === activeViewer();
+  return true;
+}
+
+// Can the active user edit/delete this entry?
+function canEditEntry(entry) {
+  if (!entry) return false;
+  if (entry.visibility === 'team') return true;
+  return entry.userId === activeViewer();
+}
+
+// Can the active user see this backlog item?
+function canSeeBacklogItem(item) {
+  if (!item) return false;
+  if (item.clientId) {
+    const client = DB.client(item.clientId);
+    if (client && !canSeeClient(client)) return false;
+  }
+  if (item.visibility === 'private') return item.createdBy === activeViewer();
+  return true;
+}
+
+// Can the active user edit/delete this backlog item?
+function canEditBacklogItem(item) {
+  if (!item) return false;
+  if (item.visibility === 'team') return true;
+  return item.createdBy === activeViewer();
+}
+
+// Visibility badge HTML
+function visibilityBadge(v) {
+  if (v === 'private') return `<span title="Private — only you" style="font-size:0.65rem;font-weight:700;padding:2px 6px;border-radius:9999px;background:#FEF3C7;color:#92400E">🔒 Private</span>`;
+  if (v === 'team')    return `<span title="Team — everyone can edit" style="font-size:0.65rem;font-weight:700;padding:2px 6px;border-radius:9999px;background:#DBEAFE;color:#1E40AF">👥 Team</span>`;
+  if (v === 'confidential') return `<span title="Confidential — visible as masked" style="font-size:0.65rem;font-weight:700;padding:2px 6px;border-radius:9999px;background:#F3E8FF;color:#6B21A8">🔐 Conf.</span>`;
+  return ''; // public — no badge needed
+}
+
+// ═══════════════════════════════════════════════
 //  TIMER ENGINE
 // ═══════════════════════════════════════════════
 
@@ -611,8 +703,24 @@ function renderDashboard() {
   const dow=now.getDay(), mon=new Date(now);
   mon.setDate(now.getDate()-(dow===0?6:dow-1));
   const weekStart=mon.toISOString().slice(0,10), monthStart=firstOfMonth();
-  const allTime=DB.time(), allExp=DB.exps();
-  const clients=DB.clients();
+  const isTeam = State.dashView === 'team';
+  const myId = activeViewer();
+
+  // All visible entries (respects client+entry visibility)
+  const visTime = DB.time().filter(e => canSeeEntry(e));
+  const visExp  = DB.exps().filter(e => {
+    const c = DB.client(e.clientId);
+    if (c && !canSeeClient(c)) return false;
+    if (e.visibility === 'private') return e.userId === myId;
+    return true;
+  });
+
+  // Personal view: only my entries; Team view: all visible entries
+  const allTime = isTeam ? visTime : visTime.filter(e => e.userId === myId);
+  const allExp  = isTeam ? visExp  : visExp.filter(e => e.userId === myId);
+
+  // Visible clients only
+  const clients = DB.clients().filter(c => canSeeClient(c));
 
   const todayHrs = allTime.filter(e=>e.date===tStr).reduce((s,e)=>s+e.hours,0);
   const weekHrs  = allTime.filter(e=>e.date>=weekStart).reduce((s,e)=>s+e.hours,0);
@@ -628,7 +736,43 @@ function renderDashboard() {
       <button onclick="showClientModal()" class="btn-primary px-5 py-2.5 rounded-lg text-sm font-medium">+ Add first client</button>
     </div>`;
 
+  const viewToggle = `
+    <div class="flex items-center gap-1 mb-4 no-print">
+      <button onclick="State.dashView='personal';render()" class="text-xs px-3 py-1.5 rounded-lg font-medium border transition-colors ${!isTeam?'bg-teal-600 text-white border-teal-600':'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}">My View</button>
+      <button onclick="State.dashView='team';render()" class="text-xs px-3 py-1.5 rounded-lg font-medium border transition-colors ${isTeam?'bg-teal-600 text-white border-teal-600':'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}">Team View</button>
+    </div>`;
+
+  // Team view: second row of charts showing team totals
+  const teamCharts = isTeam ? `
+    <div class="mt-3">
+      <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Team totals</div>
+      <div class="grid grid-cols-3 gap-4">
+        <div class="card p-4">
+          <div class="flex justify-between items-center mb-2">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Team Today</span>
+            <span class="text-xs font-semibold text-gray-800">${fmtHours(visTime.filter(e=>e.date===tStr).reduce((s,e)=>s+e.hours,0))}</span>
+          </div>
+          ${buildBarChart(visTime.filter(e=>e.date===tStr), clients, true)}
+        </div>
+        <div class="card p-4">
+          <div class="flex justify-between items-center mb-2">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Team Week</span>
+            <span class="text-xs font-semibold text-gray-800">${fmtHours(visTime.filter(e=>e.date>=weekStart).reduce((s,e)=>s+e.hours,0))}</span>
+          </div>
+          ${buildBarChart(visTime.filter(e=>e.date>=weekStart), clients, true)}
+        </div>
+        <div class="card p-4">
+          <div class="flex justify-between items-center mb-2">
+            <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Team ${monthLabel}</span>
+            <span class="text-xs font-semibold text-gray-800">${fmtHours(visTime.filter(e=>e.date>=monthStart).reduce((s,e)=>s+e.hours,0))}</span>
+          </div>
+          ${buildBarChart(visTime.filter(e=>e.date>=monthStart), clients, true)}
+        </div>
+      </div>
+    </div>` : '';
+
   return `
+    ${viewToggle}
     <div class="card overflow-hidden mb-4">
       <div class="dash-row-grid border-b border-gray-200 bg-gray-50 px-4 py-2 no-print">
         <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Client — ${monthLabel}</div>
@@ -670,12 +814,14 @@ function renderDashboard() {
       ${monthExp>0?`<span class="text-xs text-gray-400">Expenses this month: <span class="font-medium text-gray-600">${fmtMoney(monthExp)}</span></span>`:'<span></span>'}
       <button onclick="navigate('reports')" class="text-xs text-teal-600 hover:underline">Full report →</button>
     </div>
+    ${teamCharts}
   `;
 }
 
-function buildBarChart(entries, clients) {
+function buildBarChart(entries, clients, maskConf=false) {
   const data = clients.map(c=>({
-    name: c.name, color: c.color||'#6366F1',
+    name: (maskConf && isClientConfidential(c)) ? 'Conf.' : clientDisplayName(c),
+    color: isClientConfidential(c) ? '#9CA3AF' : (c.color||'#6366F1'),
     hrs: entries.filter(e=>e.clientId===c.id).reduce((s,e)=>s+e.hours,0)
   })).filter(d=>d.hrs>0);
 
@@ -707,10 +853,31 @@ function buildBarChart(entries, clients) {
 function renderDashClientRow(client, allTime, allExp, monthStart) {
   const key    = sanitizeKey(client.id);
   const isExp  = State.expanded.has(client.id);
-  const subPs  = DB.projs(client.id);
+  const conf   = isClientConfidential(client);
+  const subPs  = conf ? [] : DB.projs(client.id);
   const mHrs   = allTime.filter(e=>e.clientId===client.id&&e.date>=monthStart).reduce((s,e)=>s+e.hours,0);
   const mExpT  = allExp.filter(e=>e.clientId===client.id&&e.date>=monthStart).reduce((s,e)=>s+(e.amount||0),0);
   const statLine=[mHrs>0?fmtHours(mHrs)+' hrs':'',mExpT>0?fmtMoney(mExpT):''].filter(Boolean).join(' · ')||'no activity';
+  const displayName = clientDisplayName(client);
+  const rowColor = conf ? '#9CA3AF' : (client.color||'#6366F1');
+
+  if (conf) {
+    // Confidential: show name+hours only, no log form
+    return `
+      <div>
+        <div class="dash-row-grid px-4 py-2.5 border-b border-gray-100">
+          <div class="flex items-center gap-2 rounded-md py-1.5 px-2 -ml-1 min-w-0" style="background:${rowColor};">
+            <div class="min-w-0">
+              <div class="text-sm font-bold text-white leading-tight italic">🔐 ${esc(displayName)}</div>
+              <div class="text-xs text-white/65 truncate">${statLine}</div>
+            </div>
+          </div>
+          <div class="col-span-7 flex items-center">
+            <span class="text-xs text-gray-400 italic">Visibility restricted</span>
+          </div>
+        </div>
+      </div>`;
+  }
 
   const pSel = `<option value="">— none —</option>`
     + subPs.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')
@@ -719,10 +886,10 @@ function renderDashClientRow(client, allTime, allExp, monthStart) {
   return `
     <div>
       <div class="dash-row-grid px-4 py-2.5 border-b border-gray-100 hover:bg-gray-50/40 transition-colors">
-        <button class="flex items-center gap-2 text-left w-full rounded-md py-1.5 px-2 -ml-1 min-w-0" style="background:${client.color||'#6366F1'};" onclick="toggleExpand('${client.id}')">
+        <button class="flex items-center gap-2 text-left w-full rounded-md py-1.5 px-2 -ml-1 min-w-0" style="background:${rowColor};" onclick="toggleExpand('${client.id}')">
           <span class="text-white/60 text-xs flex-shrink-0 inline-block transition-transform duration-150" style="transform:rotate(${isExp?'90':'0'}deg)">▶</span>
           <div class="min-w-0">
-            <div class="text-sm font-bold text-white leading-tight">${esc(client.name)}</div>
+            <div class="text-sm font-bold text-white leading-tight">${esc(displayName)}</div>
             <div class="text-xs text-white/65 truncate">${statLine}</div>
           </div>
         </button>
@@ -836,18 +1003,18 @@ function submitClientLog(clientId) {
   if(type==='time') {
     const hours=parseFloat(amt);
     if(!hours||hours<=0){toast('Enter hours','err');return;}
-    DB.addTime({userId,clientId,projectId:projId,date,hours,notes,billable:true,createdAt:new Date().toISOString()});
+    DB.addTime({userId,clientId,projectId:projId,date,hours,notes,billable:true,visibility:'public',createdAt:new Date().toISOString()});
     toast('Time logged ✓');
   } else if(type==='expense') {
     const amount=parseFloat(amt);
     if(!amount||amount<=0){toast('Enter an amount','err');return;}
-    DB.addExp({userId,clientId,projectId:projId,date,amount,category:'Other',notes,billable:true,createdAt:new Date().toISOString()});
+    DB.addExp({userId,clientId,projectId:projId,date,amount,category:'Other',notes,billable:true,visibility:'public',createdAt:new Date().toISOString()});
     toast('Expense logged ✓');
   } else {
     if(!what){toast('Enter an item title','err');return;}
     const bl=DB.backlog();
     const now=new Date().toISOString();
-    bl.push({id:uid(),title:what,description:note,priority:'medium',clientId,projectId:projId,weekOf:null,archivedAt:null,createdAt:now,lastTouchedAt:now});
+    bl.push({id:uid(),title:what,description:note,priority:'medium',clientId,projectId:projId,weekOf:null,archivedAt:null,visibility:'public',createdBy:userId,createdAt:now,lastTouchedAt:now});
     DB.saveBack(bl);
     toast('Backlog item added ✓');
   }
@@ -911,7 +1078,7 @@ function syncTimerNotes()  { const t=DB.timer(); t.notes=document.getElementById
 
 function renderLog() {
   const f=State.filters.log;
-  let entries=DB.time().sort((a,b)=>b.date.localeCompare(a.date)||(b.createdAt||'').localeCompare(a.createdAt||''));
+  let entries=DB.time().filter(e=>canSeeEntry(e)).sort((a,b)=>b.date.localeCompare(a.date)||(b.createdAt||'').localeCompare(a.createdAt||''));
   if(f.client)  entries=entries.filter(e=>e.clientId===f.client);
   if(f.project) entries=entries.filter(e=>e.projectId===f.project);
   if(f.user)    entries=entries.filter(e=>e.userId===f.user);
@@ -946,24 +1113,31 @@ function renderLog() {
 }
 
 function entryRow(entry) {
-  const client=DB.client(entry.clientId);
-  const proj=entry.projectId?DB.proj(entry.projectId):null;
-  const user=DB.users().find(u=>u.id===entry.userId);
+  const client = DB.client(entry.clientId);
+  const conf   = isClientConfidential(client);
+  const proj   = (!conf && entry.projectId) ? DB.proj(entry.projectId) : null;
+  const user   = DB.users().find(u=>u.id===entry.userId);
+  const canEdit = canEditEntry(entry);
+  const vBadge  = visibilityBadge(entry.visibility);
+  const dispName = conf ? 'Confidential Client' : (client?.name || '');
+  const dispColor = conf ? '#9CA3AF' : (client?.color||'#6366F1');
   return `
     <div class="entry-row px-4 py-3 flex items-center gap-3">
       <div class="flex-1 min-w-0">
         <div class="text-sm font-medium text-gray-800 truncate">
-          ${client?`<span style="color:${client.color||'#6366F1'}" class="mr-1">●</span>${esc(client.name)}`:'<span class="text-gray-400 italic text-xs">No client</span>'}
+          ${client?`<span style="color:${dispColor}" class="mr-1">●</span>${conf?`<span class="italic text-gray-400">${esc(dispName)}</span>`:esc(dispName)}`:'<span class="text-gray-400 italic text-xs">No client</span>'}
           ${proj?`<span class="text-gray-400 mx-1.5">›</span><span class="text-gray-600">${esc(proj.name)}</span>`:''}
         </div>
-        ${entry.notes?`<div class="text-xs text-gray-400 truncate mt-0.5">${esc(entry.notes)}</div>`:''}
+        ${(!conf && entry.notes)?`<div class="text-xs text-gray-400 truncate mt-0.5">${esc(entry.notes)}</div>`:''}
+        ${vBadge?`<div class="mt-0.5">${vBadge}</div>`:''}
       </div>
       ${user?`<span class="text-xs text-gray-400 hidden sm:block flex-shrink-0">${esc(user.name)}</span>`:''}
       <span class="text-xs ${entry.billable?'text-teal-500 font-semibold':'text-gray-300'}" title="${entry.billable?'Billable':'Non-billable'}">$</span>
       <span class="text-sm font-semibold text-gray-700 w-10 text-right flex-shrink-0">${fmtHours(entry.hours)}</span>
       <div class="flex gap-0.5 flex-shrink-0">
-        <button onclick="editTimeEntry('${entry.id}')" class="p-1.5 text-gray-300 hover:text-gray-600 rounded">✏️</button>
-        <button onclick="delTimeEntry('${entry.id}')" class="p-1.5 text-gray-300 hover:text-red-500 rounded">🗑</button>
+        ${canEdit?`<button onclick="editTimeEntry('${entry.id}')" class="p-1.5 text-gray-300 hover:text-gray-600 rounded">✏️</button>`:''}
+        ${canEdit?`<button onclick="delTimeEntry('${entry.id}')" class="p-1.5 text-gray-300 hover:text-red-500 rounded">🗑</button>`:
+          `<span class="w-8 inline-block"></span>`}
       </div>
     </div>`;
 }
@@ -976,7 +1150,12 @@ const EXP_CATS = ['Travel','Meals','Software','Hardware','Office','Marketing','S
 
 function renderExpenses() {
   const f=State.filters.expenses;
-  let exps=DB.exps().sort((a,b)=>b.date.localeCompare(a.date)||(b.createdAt||'').localeCompare(a.createdAt||''));
+  let exps=DB.exps().filter(e=>{
+    const c=DB.client(e.clientId);
+    if(c&&!canSeeClient(c))return false;
+    if(e.visibility==='private')return e.userId===activeViewer();
+    return true;
+  }).sort((a,b)=>b.date.localeCompare(a.date)||(b.createdAt||'').localeCompare(a.createdAt||''));
   if(f.client) exps=exps.filter(e=>e.clientId===f.client);
   if(f.from)   exps=exps.filter(e=>e.date>=f.from);
   if(f.to)     exps=exps.filter(e=>e.date<=f.to);
@@ -1007,22 +1186,26 @@ function renderExpenses() {
 }
 
 function expRow(exp) {
-  const client=DB.client(exp.clientId);
-  const proj=exp.projectId?DB.proj(exp.projectId):null;
+  const client = DB.client(exp.clientId);
+  const conf   = isClientConfidential(client);
+  const proj   = (!conf && exp.projectId) ? DB.proj(exp.projectId) : null;
+  const canEdit = exp.userId === activeViewer() || exp.visibility === 'team';
+  const dispName = conf ? 'Confidential Client' : (client?.name||'');
+  const dispColor = conf ? '#9CA3AF' : (client?.color||'#6366F1');
   return `
     <div class="entry-row px-4 py-3 flex items-center gap-3">
       <div class="flex-1 min-w-0">
         <div class="text-sm font-medium text-gray-800 truncate">
-          ${client?`<span style="color:${client.color||'#6366F1'}" class="mr-1">●</span>${esc(client.name)}`:'<span class="text-gray-400 italic text-xs">No client</span>'}
+          ${client?`<span style="color:${dispColor}" class="mr-1">●</span>${conf?`<span class="italic text-gray-400">${esc(dispName)}</span>`:esc(dispName)}`:'<span class="text-gray-400 italic text-xs">No client</span>'}
           ${proj?`<span class="text-gray-400 mx-1.5">›</span><span class="text-gray-600">${esc(proj.name)}</span>`:''}
         </div>
-        <div class="text-xs text-gray-400 mt-0.5">${esc(exp.category||'Other')}${exp.notes?' · '+esc(exp.notes):''}</div>
+        ${!conf?`<div class="text-xs text-gray-400 mt-0.5">${esc(exp.category||'Other')}${exp.notes?' · '+esc(exp.notes):''}</div>`:''}
       </div>
       <span class="text-xs ${exp.billable?'text-teal-500 font-semibold':'text-gray-300'}">$</span>
       <span class="text-sm font-semibold text-gray-700 w-20 text-right flex-shrink-0">${fmtMoney(exp.amount)}</span>
       <div class="flex gap-0.5 flex-shrink-0">
-        <button onclick="editExpense('${exp.id}')" class="p-1.5 text-gray-300 hover:text-gray-600 rounded">✏️</button>
-        <button onclick="delExpense('${exp.id}')" class="p-1.5 text-gray-300 hover:text-red-500 rounded">🗑</button>
+        ${canEdit?`<button onclick="editExpense('${exp.id}')" class="p-1.5 text-gray-300 hover:text-gray-600 rounded">✏️</button>`:''}
+        ${canEdit?`<button onclick="delExpense('${exp.id}')" class="p-1.5 text-gray-300 hover:text-red-500 rounded">🗑</button>`:`<span class="w-8 inline-block"></span>`}
       </div>
     </div>`;
 }
@@ -1051,6 +1234,7 @@ function renderClients() {
               <span class="font-semibold text-gray-800">${esc(c.name)}</span>
               ${getBadge(c.type)}
               ${isArch?'<span class="badge badge-internal">Archived</span>':''}
+              ${c.visibility&&c.visibility!=='public'?visibilityBadge(c.visibility):''}
               ${c.rate?`<span class="text-xs text-teal-600">${fmtMoney(c.rate)}/hr</span>`:''}
             </div>
             <div class="text-xs text-gray-400 mb-3">${fmtHours(hrs)} hrs all time · ${fmtMoney(expT)} expenses</div>
@@ -1099,7 +1283,7 @@ function renderClients() {
 function renderBacklog() {
   if(State.groomMode) return renderGroomMode();
   const all = DB.backlog();
-  const active = all.filter(i => !i.archivedAt);
+  const active = all.filter(i => !i.archivedAt && canSeeBacklogItem(i));
   const cw = currentWeek();
   const backlogItems = active.filter(i => !i.weekOf);
   const thisWeekItems = active.filter(i => i.weekOf === cw);
@@ -1146,6 +1330,9 @@ function renderBacklog() {
     const age = itemAgedays(item);
     const stale = age >= 30;
     const borderStyle = highlight ? 'border-amber-200 bg-amber-50/30' : 'border-gray-200 bg-white';
+    const assignee = item.assignedTo ? DB.users().find(u=>u.id===item.assignedTo) : null;
+    const canEdit = canEditBacklogItem(item);
+    const vBadge = visibilityBadge(item.visibility);
     return `<div class="group relative ${borderStyle} border rounded-lg px-3 py-2.5 mb-2 hover:border-gray-300 hover:shadow-sm transition-all cursor-pointer" onclick="editBacklogItem('${item.id}')">
       <div class="flex items-start gap-2">
         <span class="text-xs mt-0.5 flex-shrink-0">${priIcon[item.priority]||'⚪'}</span>
@@ -1154,13 +1341,15 @@ function renderBacklog() {
           ${item.description?`<div class="text-xs text-gray-400 mt-0.5 line-clamp-1">${esc(item.description)}</div>`:''}
           ${itemBadges(item)}
           ${proj?`<div class="text-xs text-gray-400 mt-1">${esc(proj.name)}</div>`:''}
+          ${assignee?`<div class="text-xs text-indigo-400 mt-1">→ ${esc(assignee.name)}</div>`:''}
+          ${vBadge?`<div class="mt-1">${vBadge}</div>`:''}
           ${!item.dueDate&&stale?`<div class="text-xs text-amber-500 mt-1">${age}d untouched</div>`:!item.dueDate&&age>14?`<div class="text-xs text-gray-300 mt-0.5">${age}d</div>`:''}
         </div>
       </div>
       <div class="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 bg-white pl-2 shadow-[-8px_0_8px_white]">
-        <button onclick="event.stopPropagation();promoteToWeek('${item.id}')" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-2 py-1 rounded font-medium whitespace-nowrap">→ Week</button>
-        <button onclick="event.stopPropagation();archiveItem('${item.id}')" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-2 py-1 rounded">Archive</button>
-        <button onclick="event.stopPropagation();delBacklogItem('${item.id}')" class="text-xs text-red-400 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-50">✕</button>
+        ${canEdit?`<button onclick="event.stopPropagation();promoteToWeek('${item.id}')" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-2 py-1 rounded font-medium whitespace-nowrap">→ Week</button>`:''}
+        ${canEdit?`<button onclick="event.stopPropagation();archiveItem('${item.id}')" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-2 py-1 rounded">Archive</button>`:''}
+        ${canEdit?`<button onclick="event.stopPropagation();delBacklogItem('${item.id}')" class="text-xs text-red-400 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-50">✕</button>`:''}
       </div>
     </div>`;
   }
@@ -1513,6 +1702,7 @@ function clearData(){
 function showTimeModal(id=null) {
   const e=id?DB.time().find(x=>x.id===id):null;
   const user=State.activeUser;
+  const vis=e?.visibility||'public';
   showModal(`
     <h3 class="font-semibold text-gray-800 mb-4">${e?'Edit Time Entry':'Log Time'}</h3>
     <div class="space-y-3">
@@ -1524,6 +1714,14 @@ function showTimeModal(id=null) {
       <div><label>Project <span class="text-gray-400 font-normal">(optional)</span></label><select id="te_proj">${projOpts(e?.clientId||'',e?.projectId||'')}</select></div>
       <div><label>Team member</label><select id="te_user">${userOpts(e?.userId||user?.id||'')}</select></div>
       <div><label>Notes</label><input type="text" id="te_notes" value="${esc(e?.notes||'')}" placeholder="What did you work on?"></div>
+      <div>
+        <label>Visibility</label>
+        <select id="te_vis">
+          <option value="public" ${vis==='public'?'selected':''}>Public — visible to team, only you can edit</option>
+          <option value="team"   ${vis==='team'  ?'selected':''}>Team — visible and editable by everyone</option>
+          <option value="private"${vis==='private'?'selected':''}>Private — only you can see this entry</option>
+        </select>
+      </div>
       <div class="flex items-center gap-2 pt-1"><input type="checkbox" id="te_bill" ${e?.billable!==false?'checked':''}><label for="te_bill" class="mb-0 cursor-pointer" style="color:#374151">Billable</label></div>
       <div class="flex justify-end gap-2 pt-2 border-t border-gray-100">
         <button onclick="closeModal()" class="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
@@ -1580,12 +1778,13 @@ function saveTimeEntry(id) {
   const userId=document.getElementById('te_user')?.value;
   const notes=document.getElementById('te_notes')?.value||'';
   const billable=document.getElementById('te_bill')?.checked??true;
+  const visibility=document.getElementById('te_vis')?.value||'public';
   if(!date){toast('Please select a date','err');return;}
   if(!hours||hours<=0){toast('Please enter valid hours','err');return;}
   if(!clientId){toast('Please select a client','err');return;}
   const all=DB.time();
-  if(id){const i=all.findIndex(e=>e.id===id);if(i>=0)all[i]={...all[i],date,hours,clientId,projectId:projId,userId,notes,billable};DB.saveTime(all);}
-  else DB.addTime({userId,clientId,projectId:projId,date,hours,notes,billable,createdAt:new Date().toISOString()});
+  if(id){const i=all.findIndex(e=>e.id===id);if(i>=0)all[i]={...all[i],date,hours,clientId,projectId:projId,userId,notes,billable,visibility};DB.saveTime(all);}
+  else DB.addTime({userId,clientId,projectId:projId,date,hours,notes,billable,visibility,createdAt:new Date().toISOString()});
   closeModal();render();toast(id?'Entry updated ✓':'Time logged ✓');
 }
 function delTimeEntry(id){if(!confirm('Delete this entry?'))return;DB.saveTime(DB.time().filter(e=>e.id!==id));render();toast('Entry deleted');}
@@ -1646,6 +1845,7 @@ const CLIENT_COLORS=['#0D9488','#6366F1','#D97706','#DC2626','#7C3AED','#0891B2'
 function showClientModal(id=null) {
   const c=id?DB.client(id):null;
   const col=c?.color||CLIENT_COLORS[0];
+  const vis=c?.visibility||'public';
   showModal(`
     <h3 class="font-semibold text-gray-800 mb-4">${c?'Edit Client':'New Client'}</h3>
     <input type="hidden" id="cl_col" value="${col}">
@@ -1657,6 +1857,14 @@ function showClientModal(id=null) {
           <option value="client"  ${(!c||c.type==='client') ?'selected':''}>Client (external / billable)</option>
           <option value="rd"      ${c?.type==='rd'          ?'selected':''}>R&D (internal research / dev)</option>
           <option value="internal"${c?.type==='internal'    ?'selected':''}>Internal / admin</option>
+        </select>
+      </div>
+      <div>
+        <label>Visibility</label>
+        <select id="cl_vis">
+          <option value="public"       ${vis==='public'      ?'selected':''}>Public — full visibility to all team members</option>
+          <option value="confidential" ${vis==='confidential'?'selected':''}>Confidential — team sees hours only (name/details hidden)</option>
+          <option value="private"      ${vis==='private'     ?'selected':''}>Private — only you can see this client</option>
         </select>
       </div>
       <div><label>Hourly rate <span class="text-gray-400 font-normal">(optional — for billed value in reports)</span></label>
@@ -1683,11 +1891,19 @@ function saveClient(id){
   const name=document.getElementById('cl_name')?.value?.trim();
   if(!name){toast('Please enter a name','err');return;}
   const type=document.getElementById('cl_type')?.value||'client';
+  const vis=document.getElementById('cl_vis')?.value||'public';
   const rate=parseFloat(document.getElementById('cl_rate')?.value)||null;
   const color=document.getElementById('cl_col')?.value||CLIENT_COLORS[0];
+  const myId=activeViewer();
   const all=DB.clients(true);
-  if(id){const i=all.findIndex(c=>c.id===id);if(i>=0)all[i]={...all[i],name,type,rate,color};DB.saveClients(all);}
-  else{all.push({id:uid(),name,type,rate,color,status:'active',createdAt:new Date().toISOString()});DB.saveClients(all);}
+  if(id){
+    const i=all.findIndex(c=>c.id===id);
+    if(i>=0)all[i]={...all[i],name,type,rate,color,visibility:vis};
+    DB.saveClients(all);
+  } else {
+    all.push({id:uid(),name,type,rate,color,visibility:vis,ownerId:myId,status:'active',createdAt:new Date().toISOString()});
+    DB.saveClients(all);
+  }
   closeModal();render();toast(id?'Client updated ✓':'Client created ✓');
 }
 function archiveClient(id){
@@ -1795,6 +2011,10 @@ function showBacklogModal(id=null) {
   const selPr=(v)=>(item?.priority||'medium')===v?'selected':'';
   const selRf=(v)=>(item?.recurFrequency||'weekly')===v?'selected':'';
   const inThisWeek = item?.weekOf === currentWeek();
+  const blVis = item?.visibility||'public';
+  const myId = activeViewer();
+  const usersForAssign = DB.users();
+  const assignedTo = item?.assignedTo||'';
   showModal(`
     <h3 class="font-semibold text-gray-800 mb-4">${item?'Edit Item':'New Backlog Item'}</h3>
     <div class="space-y-3">
@@ -1839,6 +2059,23 @@ function showBacklogModal(id=null) {
         <label>Repeats</label>
         <select id="bl_recurFreq"><option value="weekly" ${selRf('weekly')}>Weekly</option><option value="biweekly" ${selRf('biweekly')}>Every 2 weeks</option><option value="monthly" ${selRf('monthly')}>Monthly</option></select>
         <p class="text-xs text-gray-400 mt-1.5">When marked done, a fresh copy returns to the backlog.</p>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label>Assigned to</label>
+          <select id="bl_assigned">
+            <option value="">Unassigned</option>
+            ${usersForAssign.map(u=>`<option value="${u.id}"${assignedTo===u.id?' selected':''}>${esc(u.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Visibility</label>
+          <select id="bl_vis">
+            <option value="public" ${blVis==='public' ?'selected':''}>Public — visible, only creator edits</option>
+            <option value="team"   ${blVis==='team'   ?'selected':''}>Team — visible and editable by all</option>
+            <option value="private"${blVis==='private'?'selected':''}>Private — only you see this</option>
+          </select>
+        </div>
       </div>
       ${item?`<div class="text-xs text-gray-400 pt-1">Currently in: ${inThisWeek?'📌 This Week':'📋 Backlog'}</div>`:''}
       <div class="flex justify-between items-center pt-2 border-t border-gray-100">
@@ -1886,12 +2123,15 @@ function saveBacklogItem(id){
     const dupe=all.find(b=>!b.archivedAt&&b.title.toLowerCase()===tl);
     if(dupe) toast(`Heads up: similar item exists — "${dupe.title}"`,'err');
   }
+  const visibility=document.getElementById('bl_vis')?.value||'public';
+  const assignedTo=document.getElementById('bl_assigned')?.value||null;
+  const myId=activeViewer();
   const now=new Date().toISOString();
   if(id){
     const i=all.findIndex(x=>x.id===id);
-    if(i>=0) all[i]={...all[i],title,description:desc,priority,effort,dueDate,urgent,recurring,recurFrequency,clientId,projectId:projId,lastTouchedAt:now};
+    if(i>=0) all[i]={...all[i],title,description:desc,priority,effort,dueDate,urgent,recurring,recurFrequency,clientId,projectId:projId,visibility,assignedTo,lastTouchedAt:now};
   } else {
-    all.push({id:uid(),title,description:desc,priority,effort,dueDate,urgent,recurring,recurFrequency,clientId,projectId:projId,weekOf:null,archivedAt:null,createdAt:now,lastTouchedAt:now});
+    all.push({id:uid(),title,description:desc,priority,effort,dueDate,urgent,recurring,recurFrequency,clientId,projectId:projId,weekOf:null,archivedAt:null,visibility,assignedTo,createdBy:myId,createdAt:now,lastTouchedAt:now});
   }
   DB.saveBack(all);
   closeModal();render();toast(id?'Item updated ✓':'Added to backlog ✓');
@@ -2072,6 +2312,7 @@ async function init(){
   // Data shape upgrades
   migrate();
   migrateBacklogModel();
+  migrateVisibility();
 
   // Link this auth user to a team member record
   await ensureTeamMember(session.user);
