@@ -1,0 +1,2094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tempo — Time & Expense Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .sidebar-link { transition: background 0.12s; border-radius: 0.5rem; }
+    .sidebar-link:hover { background: rgba(255,255,255,0.08); }
+    .sidebar-link.active { background: rgba(255,255,255,0.14); color: white; }
+    .nav-icon { opacity: 0.6; }
+    .sidebar-link.active .nav-icon { opacity: 1; }
+    .card { background: white; border-radius: 0.625rem; box-shadow: 0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04); }
+    .btn-primary { background: #0D9488; color: white; cursor: pointer; border: none; transition: background 0.12s; }
+    .btn-primary:hover { background: #0F766E; }
+    .btn-secondary { background: white; color: #374151; border: 1px solid #D1D5DB; cursor: pointer; transition: background 0.12s; }
+    .btn-secondary:hover { background: #F9FAFB; }
+    .btn-danger { background: white; color: #DC2626; border: 1px solid #FECACA; cursor: pointer; }
+    .btn-danger:hover { background: #FEF2F2; }
+    input[type="text"], input[type="number"], input[type="date"], select, textarea {
+      border: 1px solid #D1D5DB; border-radius: 0.4rem; padding: 0.45rem 0.7rem;
+      width: 100%; font-size: 0.875rem; color: #111827; background: white;
+      transition: border-color 0.1s, box-shadow 0.1s;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none; border-color: #0D9488; box-shadow: 0 0 0 3px rgba(13,148,136,0.12);
+    }
+    input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #0D9488; }
+    label { font-size: 0.8rem; font-weight: 500; color: #6B7280; display: block; margin-bottom: 0.25rem; }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.38); z-index: 100;
+      display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
+    .modal-box { background: white; border-radius: 0.875rem; padding: 1.5rem;
+      width: 500px; max-width: 94vw; max-height: 92vh; overflow-y: auto;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.18); }
+    .entry-row { border-bottom: 1px solid #F3F4F6; transition: background 0.1s; }
+    .entry-row:hover { background: #FAFAFA; }
+    .entry-row:last-child { border-bottom: none; }
+    .badge { font-size: 0.65rem; font-weight: 700; padding: 2px 7px; border-radius: 9999px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .badge-client   { background: #DBEAFE; color: #1E40AF; }
+    .badge-rd       { background: #D1FAE5; color: #065F46; }
+    .badge-internal { background: #F3F4F6; color: #6B7280; }
+    .timer-display { font-size: 3.75rem; font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1; }
+    .timer-running { color: #0D9488; }
+    .kanban-col { min-height: 180px; flex: 1; min-width: 220px; }
+    .kanban-card { background: white; border: 1px solid #E5E7EB; border-radius: 0.5rem; padding: 0.75rem; margin-bottom: 0.5rem; cursor: pointer; transition: box-shadow 0.12s; }
+    .kanban-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); border-color: #D1D5DB; }
+    #toastContainer { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 200; pointer-events: none; }
+    .toast { background: #111827; color: white; padding: 0.7rem 1.1rem; border-radius: 0.5rem; margin-top: 0.5rem; font-size: 0.85rem; animation: slideIn 0.2s ease; }
+    .toast-error { background: #991B1B; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .color-dot { width: 1.5rem; height: 1.5rem; border-radius: 9999px; cursor: pointer; transition: transform 0.1s; border: 2px solid transparent; }
+    .color-dot:hover { transform: scale(1.15); }
+    .color-dot.selected { box-shadow: 0 0 0 2px white, 0 0 0 4px currentColor; transform: scale(1.1); }
+    @media print { .sidebar, .no-print { display: none !important; } .main-content { margin-left: 0 !important; } }
+    ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 9999px; }
+    optgroup { font-weight: 600; font-size: 0.75rem; color: #6B7280; }
+    .dash-row-grid { display: grid; grid-template-columns: 190px 108px 82px 120px minmax(0,1fr) minmax(0,1fr) 118px 58px; gap: 8px; align-items: center; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<div id="toastContainer"></div>
+
+<!-- Sidebar -->
+<div class="sidebar fixed left-0 top-0 h-full w-52 bg-gray-900 flex flex-col z-50 overflow-hidden">
+  <div class="px-4 py-4 border-b border-gray-700/60 flex-shrink-0">
+    <div class="flex items-center gap-2.5">
+      <div class="w-7 h-7 bg-teal-500 rounded-lg flex items-center justify-center text-white font-black text-sm">T</div>
+      <div>
+        <div class="text-white font-bold text-base leading-none">Tempo</div>
+        <div class="text-gray-500 text-xs mt-0.5">Time & Expense</div>
+      </div>
+    </div>
+  </div>
+  <div class="px-3 py-2.5 border-b border-gray-700/60 flex-shrink-0">
+    <select id="activeUserSelect" class="bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded-lg px-2.5 py-1.5 w-full cursor-pointer"></select>
+  </div>
+  <nav class="flex-1 py-2.5 px-2 overflow-y-auto" id="sidebarNav"></nav>
+  <div id="sidebarTimerBar" class="px-3 pb-3 hidden flex-shrink-0">
+    <div class="bg-teal-900/60 rounded-lg px-3 py-2 border border-teal-700/40">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-1.5">
+          <div class="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse"></div>
+          <span class="text-teal-300 text-xs font-medium">Running</span>
+        </div>
+        <button onclick="navigate('timer')" class="text-teal-400 text-xs hover:text-teal-200">view</button>
+      </div>
+      <div id="sidebarTimerDisplay" class="text-teal-100 font-mono font-bold text-sm mt-0.5">0:00:00</div>
+    </div>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main-content ml-52 min-h-screen flex flex-col">
+  <div class="sticky top-0 z-40 bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between no-print flex-shrink-0">
+    <div id="pageTitle" class="text-base font-semibold text-gray-800"></div>
+    <button id="headerAddBtn" onclick="showAddModal()" class="btn-primary text-sm px-4 py-2 rounded-lg font-medium hidden">+ Add</button>
+  </div>
+  <div id="appContent" class="p-6 flex-1"></div>
+</div>
+
+<!-- Modal -->
+<div id="modalOverlay" class="modal-overlay hidden" onclick="maybeCloseModal(event)">
+  <div id="modalBox" class="modal-box" onclick="event.stopPropagation()"></div>
+</div>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════
+//  STORAGE KEYS
+// ═══════════════════════════════════════════════
+
+const KEYS = {
+  users:       'tempo_v1_users',
+  clients:     'tempo_v1_clients',      // top-level: Sesame, URWay, R&D, etc.
+  projects:    'tempo_v1_subprojects',  // projects/tasks under a client
+  timeEntries: 'tempo_v1_time',
+  expenses:    'tempo_v1_expenses',
+  backlog:     'tempo_v1_backlog',
+  timer:       'tempo_v1_timer',
+  settings:    'tempo_v1_settings',
+};
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+
+// ═══════════════════════════════════════════════
+//  SUPABASE — config + in-memory cache
+// ═══════════════════════════════════════════════
+
+const _SB_URL = 'https://boynlwmuhunnfgruwamg.supabase.co';
+const _SB_KEY = 'sb_publishable_hyin-isXk2gr4JV7DBKpMQ__J_f7ApE';
+const _sb = supabase.createClient(_SB_URL, _SB_KEY);
+
+// In-memory cache — all reads come from here; writes go to cache + Supabase
+const _cache = {};
+
+// Map localStorage keys → Supabase table names
+const _TABLE = {
+  [KEYS.clients]:     'clients',
+  [KEYS.projects]:    'projects',
+  [KEYS.timeEntries]: 'time_entries',
+  [KEYS.expenses]:    'expenses',
+  [KEYS.backlog]:     'backlog_items',
+  [KEYS.users]:       'team_members',
+};
+
+// load/save — synchronous from cache perspective; writes fire async Supabase sync
+const load  = (k, def=[]) => { const v = _cache[k]; return (v !== undefined && v !== null) ? v : def; };
+const loadO = (k, def={}) => { const v = _cache[k]; return (v !== undefined && v !== null) ? v : def; };
+const save  = (k, v) => {
+  const old = _cache[k];
+  _cache[k] = v;
+  if (k === KEYS.timer) { localStorage.setItem(k, JSON.stringify(v)); return; } // timer stays local
+  _sbSync(k, v, old).catch(e => console.warn('Supabase sync error', e));
+};
+
+// Pull all data from Supabase into cache
+async function syncAll() {
+  const pulls = Object.entries(_TABLE).map(async ([key, table]) => {
+    const { data, error } = await _sb.from(table).select('id, data');
+    if (!error && data) _cache[key] = data.map(r => r.data);
+  });
+  await Promise.all(pulls);
+  // Settings
+  const { data: s } = await _sb.from('app_settings').select('value').eq('key','main').maybeSingle();
+  _cache[KEYS.settings] = s?.value || {};
+  // Timer stays in localStorage
+  try { _cache[KEYS.timer] = JSON.parse(localStorage.getItem(KEYS.timer)); } catch { _cache[KEYS.timer] = null; }
+}
+
+// Push one key's data to Supabase (diff-based: upsert changed, delete removed)
+async function _sbSync(key, newData, oldData) {
+  if (key === KEYS.settings) {
+    await _sb.from('app_settings').upsert({ key: 'main', value: newData });
+    return;
+  }
+  const table = _TABLE[key];
+  if (!table || !Array.isArray(newData)) return;
+  // Delete records removed from the array
+  if (Array.isArray(oldData) && oldData.length > 0) {
+    const newIds = new Set(newData.map(i => i.id));
+    const gone   = oldData.filter(i => !newIds.has(i.id)).map(i => i.id);
+    if (gone.length) await _sb.from(table).delete().in('id', gone);
+  }
+  // Upsert remaining records
+  if (newData.length > 0) {
+    const rows = newData.map(item => ({ id: item.id, data: item, updated_at: new Date().toISOString() }));
+    await _sb.from(table).upsert(rows);
+  }
+}
+
+// On first login: if Supabase is empty but localStorage has data, import it automatically
+async function maybeImportLocalStorage() {
+  if ((_cache[KEYS.clients] || []).length > 0) return; // already has data
+  const lsClients = (() => { try { return JSON.parse(localStorage.getItem(KEYS.clients)) || []; } catch { return []; } })();
+  if (lsClients.length === 0) return;
+  const migrateKeys = [KEYS.clients, KEYS.projects, KEYS.timeEntries, KEYS.expenses, KEYS.backlog, KEYS.users];
+  for (const k of migrateKeys) {
+    const data = (() => { try { return JSON.parse(localStorage.getItem(k)) || []; } catch { return []; } })();
+    if (data.length > 0) { _cache[k] = data; await _sbSync(k, data, []); }
+  }
+  const lsSettings = (() => { try { return JSON.parse(localStorage.getItem(KEYS.settings)) || {}; } catch { return {}; } })();
+  _cache[KEYS.settings] = lsSettings;
+  await _sb.from('app_settings').upsert({ key: 'main', value: lsSettings });
+  toast('Your existing data has been synced to the shared workspace ✓');
+}
+
+// Ensure the logged-in auth user has a team_member record
+async function ensureTeamMember(authUser) {
+  const members = DB.users();
+  const existing = members.find(m => m.authId === authUser.id);
+  if (existing) {
+    if (!DB.settings().activeUserId) DB.saveSet({ ...DB.settings(), activeUserId: existing.id });
+    return;
+  }
+  const colors = ['#0D9488','#6366F1','#D97706','#DC2626','#7C3AED','#0891B2','#65A30D','#DB2777'];
+  const name = authUser.user_metadata?.full_name || authUser.email.split('@')[0];
+  const newMember = { id: uid(), authId: authUser.id, email: authUser.email, name, color: colors[members.length % colors.length], createdAt: new Date().toISOString() };
+  DB.saveU([...members, newMember]);
+  DB.saveSet({ ...DB.settings(), activeUserId: newMember.id });
+}
+
+// ── Login screen ──────────────────────────────
+function renderLogin() {
+  document.querySelector('.sidebar').style.display = 'none';
+  document.querySelector('.main-content').style.display = 'none';
+  if (document.getElementById('loginScreen')) return;
+  const d = document.createElement('div');
+  d.id = 'loginScreen';
+  d.innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F9FAFB">
+      <div style="background:white;border-radius:1rem;padding:2rem;width:360px;box-shadow:0 20px 60px rgba(0,0,0,0.12)">
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1.75rem">
+          <div style="width:2.25rem;height:2.25rem;background:#0D9488;border-radius:0.5rem;display:flex;align-items:center;justify-content:center;color:white;font-weight:900;font-size:1rem">T</div>
+          <div><div style="font-weight:700;font-size:1.2rem;color:#111827">Tempo</div><div style="font-size:0.75rem;color:#9CA3AF">Time & Expense</div></div>
+        </div>
+        <div id="loginErr" style="display:none;background:#FEF2F2;color:#DC2626;font-size:0.8rem;padding:0.5rem 0.75rem;border-radius:0.4rem;margin-bottom:1rem;border:1px solid #FECACA"></div>
+        <div id="signupName_wrap" style="display:none;margin-bottom:0.875rem">
+          <label style="font-size:0.8rem;font-weight:500;color:#6B7280;display:block;margin-bottom:0.25rem">Your name</label>
+          <input type="text" id="signupName" placeholder="Jane Smith" style="width:100%;padding:0.5rem 0.7rem;border:1px solid #D1D5DB;border-radius:0.4rem;font-size:0.875rem;box-sizing:border-box">
+        </div>
+        <div style="margin-bottom:0.875rem">
+          <label style="font-size:0.8rem;font-weight:500;color:#6B7280;display:block;margin-bottom:0.25rem">Email</label>
+          <input type="email" id="loginEmail" placeholder="you@example.com" style="width:100%;padding:0.5rem 0.7rem;border:1px solid #D1D5DB;border-radius:0.4rem;font-size:0.875rem;box-sizing:border-box">
+        </div>
+        <div style="margin-bottom:1.25rem">
+          <label style="font-size:0.8rem;font-weight:500;color:#6B7280;display:block;margin-bottom:0.25rem">Password</label>
+          <input type="password" id="loginPassword" placeholder="••••••••" style="width:100%;padding:0.5rem 0.7rem;border:1px solid #D1D5DB;border-radius:0.4rem;font-size:0.875rem;box-sizing:border-box" onkeydown="if(event.key==='Enter')doLogin()">
+        </div>
+        <button onclick="doLogin()" id="loginBtn" style="width:100%;background:#0D9488;color:white;border:none;padding:0.7rem;border-radius:0.5rem;font-size:0.9rem;font-weight:600;cursor:pointer">Sign in</button>
+        <div style="margin-top:1rem;text-align:center">
+          <button onclick="toggleLoginMode()" id="toggleLoginBtn" style="font-size:0.8rem;color:#0D9488;background:none;border:none;cursor:pointer;text-decoration:underline">Don't have an account? Sign up</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(d);
+}
+
+let _loginIsSignup = false;
+function toggleLoginMode() {
+  _loginIsSignup = !_loginIsSignup;
+  document.getElementById('signupName_wrap').style.display = _loginIsSignup ? 'block' : 'none';
+  document.getElementById('loginBtn').textContent          = _loginIsSignup ? 'Create account' : 'Sign in';
+  document.getElementById('toggleLoginBtn').textContent    = _loginIsSignup ? 'Already have an account? Sign in' : "Don't have an account? Sign up";
+  document.getElementById('loginErr').style.display = 'none';
+}
+
+async function doLogin() {
+  const email    = (document.getElementById('loginEmail')?.value || '').trim();
+  const password = document.getElementById('loginPassword')?.value || '';
+  const errEl    = document.getElementById('loginErr');
+  const btn      = document.getElementById('loginBtn');
+  if (!email || !password) { errEl.textContent = 'Please enter your email and password'; errEl.style.display = 'block'; return; }
+  btn.textContent = 'Please wait…'; btn.disabled = true;
+  let result;
+  if (_loginIsSignup) {
+    const name = (document.getElementById('signupName')?.value || '').trim();
+    if (!name) { errEl.textContent = 'Please enter your name'; errEl.style.display = 'block'; btn.textContent = 'Create account'; btn.disabled = false; return; }
+    result = await _sb.auth.signUp({ email, password, options: { data: { full_name: name } } });
+    if (!result.error && result.data?.user && !result.data.session) {
+      errEl.style.display = 'none';
+      btn.textContent = '✓ Check your email to confirm';
+      return;
+    }
+  } else {
+    result = await _sb.auth.signInWithPassword({ email, password });
+  }
+  if (result.error) {
+    errEl.textContent = result.error.message; errEl.style.display = 'block';
+    btn.textContent = _loginIsSignup ? 'Create account' : 'Sign in'; btn.disabled = false;
+    return;
+  }
+  document.getElementById('loginScreen')?.remove();
+  document.querySelector('.sidebar').style.display = '';
+  document.querySelector('.main-content').style.display = '';
+  await init();
+}
+
+async function signOut() {
+  if (!confirm('Sign out?')) return;
+  await _sb.auth.signOut();
+  location.reload();
+}
+
+// ═══════════════════════════════════════════════
+//  DATA LAYER
+// ═══════════════════════════════════════════════
+
+const DB = {
+  // ── Users ──────────────────────────────────
+  users:    ()  => load(KEYS.users),
+  saveU:    (u) => save(KEYS.users, u),
+
+  // ── Clients (top level) ────────────────────
+  clients:       (inclArch=false) => { const a = load(KEYS.clients); return inclArch ? a : a.filter(c=>c.status!=='archived'); },
+  client:        (id) => load(KEYS.clients).find(c=>c.id===id),
+  saveClients:   (c)  => save(KEYS.clients, c),
+
+  // ── Projects (under a client) ──────────────
+  projs:         (clientId=null) => { const a = load(KEYS.projects); return clientId ? a.filter(p=>p.clientId===clientId&&p.status!=='archived') : a.filter(p=>p.status!=='archived'); },
+  proj:          (id) => load(KEYS.projects).find(p=>p.id===id),
+  saveProjs:     (p)  => save(KEYS.projects, p),
+  addProj:       (p)  => { const a = load(KEYS.projects); p.id=uid(); a.push(p); save(KEYS.projects,a); return p; },
+
+  // ── Time entries ───────────────────────────
+  time:     () => load(KEYS.timeEntries),
+  saveTime: (t) => save(KEYS.timeEntries, t),
+  addTime:  (e) => { const a = load(KEYS.timeEntries); e.id=uid(); a.push(e); save(KEYS.timeEntries,a); return e; },
+
+  // ── Expenses ───────────────────────────────
+  exps:    () => load(KEYS.expenses),
+  saveExp: (e) => save(KEYS.expenses, e),
+  addExp:  (e) => { const a = load(KEYS.expenses); e.id=uid(); a.push(e); save(KEYS.expenses,a); return e; },
+
+  // ── Backlog ────────────────────────────────
+  backlog:  () => load(KEYS.backlog),
+  saveBack: (b) => save(KEYS.backlog, b),
+
+  // ── Timer ──────────────────────────────────
+  timer:    () => loadO(KEYS.timer, { running:false, startedAt:null, clientId:'', projectId:'', userId:'', notes:'', accum:0 }),
+  saveTimer:(t) => save(KEYS.timer, t),
+
+  // ── Settings ───────────────────────────────
+  settings: () => loadO(KEYS.settings, { activeUserId:null }),
+  saveSet:  (s) => save(KEYS.settings, s),
+};
+
+// ═══════════════════════════════════════════════
+//  MIGRATION (old model → new model)
+// ═══════════════════════════════════════════════
+
+function migrate() {
+  const oldRaw = localStorage.getItem('tempo_v1_projects');
+  const hasNew = localStorage.getItem(KEYS.clients);
+  if (!oldRaw || hasNew) return; // nothing to migrate
+
+  try {
+    const oldPs = JSON.parse(oldRaw);
+    // Old "projects" become clients
+    const clients = oldPs.map(p => ({
+      id: p.id, name: p.name, type: p.type||'client',
+      rate: p.rate||null, color: p.color||'#6366F1',
+      status: p.status||'active', createdAt: p.createdAt||new Date().toISOString()
+    }));
+    save(KEYS.clients, clients);
+    save(KEYS.projects, []); // start with empty sub-projects
+
+    // Time entries: rename projectId → clientId
+    const te = load(KEYS.timeEntries).map(e => ({ ...e, clientId: e.projectId||e.clientId||'', projectId: null }));
+    save(KEYS.timeEntries, te);
+
+    // Expenses: same
+    const ex = load(KEYS.expenses).map(e => ({ ...e, clientId: e.projectId||e.clientId||'', projectId: null }));
+    save(KEYS.expenses, ex);
+
+    // Backlog: same
+    const bl = load(KEYS.backlog).map(b => ({ ...b, clientId: b.projectId||b.clientId||'', projectId: null }));
+    save(KEYS.backlog, bl);
+
+
+    localStorage.removeItem('tempo_v1_projects');
+  } catch(e) { console.warn('Migration failed', e); }
+}
+
+function migrateBacklogModel() {
+  // Migrate old status-based backlog items to weekOf/archivedAt model
+  const items = load(KEYS.backlog);
+  let changed = false;
+  const cw = currentWeek();
+  const migrated = items.map(b => {
+    if(b.archivedAt !== undefined) return b; // already migrated
+    changed = true;
+    if(b.status==='done') return {...b, archivedAt: b.createdAt||new Date().toISOString(), weekOf: null};
+    if(b.status==='in-progress') return {...b, weekOf: cw, archivedAt: null};
+    return {...b, weekOf: null, archivedAt: null};
+  });
+  if(changed) save(KEYS.backlog, migrated);
+}
+
+// ═══════════════════════════════════════════════
+//  APP STATE
+// ═══════════════════════════════════════════════
+
+const State = {
+  view: 'dashboard',
+  timerTick: null,
+  expanded: new Set(),
+  groomMode: false,
+
+  filters: {
+    log:      { client:'', project:'', user:'', from:'', to:'' },
+    expenses: { client:'', from:'', to:'' },
+    reports:  { from: firstOfMonth(), to: todayStr() },
+    backlog:  { client:'', project:'' },
+  },
+
+  get activeUser() {
+    const { activeUserId } = DB.settings();
+    const users = DB.users();
+    return users.find(u=>u.id===activeUserId) || users[0] || null;
+  },
+  setActiveUser(id) { const s=DB.settings(); s.activeUserId=id; DB.saveSet(s); },
+};
+
+// ═══════════════════════════════════════════════
+//  UTILITIES
+// ═══════════════════════════════════════════════
+
+function todayStr() { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function firstOfMonth() { const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-01`; }
+function currentWeek() { const d=new Date(),day=d.getDay(),diff=d.getDate()-day+(day===0?-6:1),m=new Date(d.getFullYear(),d.getMonth(),diff); return `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}-${String(m.getDate()).padStart(2,'0')}`; }
+function weekLabel(wk) { if(!wk)return''; const d=new Date(wk+'T12:00:00'); return d.toLocaleDateString('en-US',{month:'short',day:'numeric'}); }
+function itemAgedays(item) { const ref=item.lastTouchedAt||item.createdAt; if(!ref)return 0; return Math.floor((Date.now()-new Date(ref).getTime())/86400000); }
+function daysUntil(dateStr) { if(!dateStr)return null; return Math.ceil((new Date(dateStr+'T12:00:00')-new Date(todayStr()+'T12:00:00'))/86400000); }
+function dueDateChip(dateStr) {
+  if(!dateStr)return'';
+  const d=daysUntil(dateStr),label=new Date(dateStr+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  if(d<0)  return `<span class="text-xs font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-md border border-red-200">${Math.abs(d)}d overdue</span>`;
+  if(d===0) return `<span class="text-xs font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-md border border-red-200">Due today</span>`;
+  if(d<=7)  return `<span class="text-xs font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-200">${label}</span>`;
+  return `<span class="text-xs text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md">${label}</span>`;
+}
+function itemSortScore(item) {
+  const d=daysUntil(item.dueDate);
+  if(d!==null&&d<0) return d-1000;   // overdue: most negative = top
+  if(item.urgent)   return -100;
+  if(d!==null&&d<=7)return d;         // due soon: 0-7
+  const pri={high:10,medium:20,low:30}[item.priority]||20;
+  return pri + (itemAgedays(item)>30?-1:0); // stale items within same priority group float up
+}
+function nextRecurDate(fromStr,freq) {
+  const d=new Date(fromStr+'T12:00:00');
+  if(freq==='daily')   d.setDate(d.getDate()+1);
+  else if(freq==='weekly')  d.setDate(d.getDate()+7);
+  else if(freq==='biweekly') d.setDate(d.getDate()+14);
+  else if(freq==='monthly') d.setMonth(d.getMonth()+1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function fmtHours(h) { if(!h||h<0)return'0:00'; const hrs=Math.floor(h),min=Math.round((h-hrs)*60); return `${hrs}:${String(min).padStart(2,'0')}`; }
+function fmtSecs(s)  { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60; return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`; }
+function fmtDate(d)  { if(!d)return''; const [y,mo,day]=d.split('-').map(Number); return new Date(y,mo-1,day).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}); }
+function fmtMoney(n) { return '$'+(+n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','); }
+function groupBy(arr,fn) { return arr.reduce((acc,item)=>{ const k=typeof fn==='function'?fn(item):item[fn]; (acc[k]=acc[k]||[]).push(item); return acc; },{}); }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function sanitizeKey(s) { return s.replace(/[^a-z0-9]/gi,'_'); }
+
+function toast(msg, type='ok') {
+  const c=document.getElementById('toastContainer');
+  const el=document.createElement('div');
+  el.className='toast'+(type==='err'?' toast-error':'');
+  el.textContent=msg; c.appendChild(el);
+  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity 0.3s'; setTimeout(()=>el.remove(),350); },2700);
+}
+function showModal(html) {
+  document.getElementById('modalBox').innerHTML=html;
+  document.getElementById('modalOverlay').classList.remove('hidden');
+  setTimeout(()=>{ const f=document.querySelector('#modalBox input:not([type=hidden]):not([type=checkbox]),#modalBox select'); if(f)f.focus(); },80);
+}
+function closeModal() { document.getElementById('modalOverlay').classList.add('hidden'); document.getElementById('modalBox').innerHTML=''; }
+function maybeCloseModal(e) { if(e.target===document.getElementById('modalOverlay'))closeModal(); }
+
+// Client options dropdown
+function clientOpts(selected='', placeholder='Select client…') {
+  const cs = DB.clients();
+  const groups = { client:[], rd:[], internal:[] };
+  cs.forEach(c=>(groups[c.type]||groups.client).push(c));
+  let h = `<option value="">${esc(placeholder)}</option>`;
+  const labels = { client:'Clients', rd:'R&D', internal:'Internal' };
+  ['client','rd','internal'].forEach(t=>{
+    if(!groups[t].length) return;
+    h += `<optgroup label="${labels[t]}">`;
+    groups[t].forEach(c=>{ h+=`<option value="${c.id}"${c.id===selected?' selected':''}>${esc(c.name)}</option>`; });
+    h += `</optgroup>`;
+  });
+  return h;
+}
+
+// Sub-project options for a given client
+function projOpts(clientId='', selected='', placeholder='— no project —') {
+  const ps = DB.projs(clientId||undefined);
+  let h = `<option value="">${esc(placeholder)}</option>`;
+  ps.forEach(p=>{ h+=`<option value="${p.id}"${p.id===selected?' selected':''}>${esc(p.name)}</option>`; });
+  if (clientId) h += `<option value="__new__">+ Add project…</option>`;
+  return h;
+}
+
+function userOpts(selected='') { return DB.users().map(u=>`<option value="${u.id}"${u.id===selected?' selected':''}>${esc(u.name)}</option>`).join(''); }
+
+function getBadge(type) {
+  const m={client:['badge-client','Client'],rd:['badge-rd','R&D'],internal:['badge-internal','Internal']};
+  const [cls,lbl]=m[type]||m.client;
+  return `<span class="badge ${cls}">${lbl}</span>`;
+}
+
+function emptyState(icon, title, sub='') {
+  return `<div class="card p-10 text-center text-gray-400"><div class="text-4xl mb-3">${icon}</div><div class="font-medium text-gray-600 mb-1">${title}</div>${sub?`<div class="text-sm mt-1">${sub}</div>`:''}</div>`;
+}
+
+// ═══════════════════════════════════════════════
+//  TIMER ENGINE
+// ═══════════════════════════════════════════════
+
+const TimerEngine = {
+  elapsed() {
+    const t=DB.timer(); let total=t.accum||0;
+    if(t.running&&t.startedAt) total+=Math.floor((Date.now()-t.startedAt)/1000);
+    return total;
+  },
+  start(clientId, projectId, notes) {
+    const t=DB.timer(); if(t.running)return;
+    DB.saveTimer({...t, running:true, startedAt:Date.now(), clientId, projectId, userId:State.activeUser?.id||'', notes});
+    this._tick(); this._sb(true);
+  },
+  pause() {
+    const t=DB.timer(); if(!t.running)return;
+    DB.saveTimer({...t, running:false, accum:(t.accum||0)+Math.floor((Date.now()-t.startedAt)/1000), startedAt:null});
+    clearInterval(State.timerTick); State.timerTick=null; this._sb(false); render();
+  },
+  reset() { clearInterval(State.timerTick); State.timerTick=null; DB.saveTimer({running:false,startedAt:null,clientId:'',projectId:'',userId:'',notes:'',accum:0}); this._sb(false); render(); },
+  save() {
+    const t=DB.timer(); const secs=this.elapsed();
+    if(secs<60){toast('Less than 1 minute — keep going!','err');return;}
+    if(!t.clientId){toast('Please select a client first','err');return;}
+    DB.addTime({userId:t.userId||State.activeUser?.id||'',clientId:t.clientId,projectId:t.projectId||null,date:todayStr(),hours:Math.round(secs/36)/100,notes:t.notes||'',billable:true,createdAt:new Date().toISOString()});
+    this.reset(); toast('Time entry saved! ✓');
+  },
+  _tick() {
+    clearInterval(State.timerTick);
+    State.timerTick=setInterval(()=>{
+      const d=fmtSecs(this.elapsed());
+      const el=document.getElementById('timerDisplay'); if(el)el.textContent=d;
+      const sb=document.getElementById('sidebarTimerDisplay'); if(sb)sb.textContent=d;
+    },1000);
+  },
+  _sb(show) { document.getElementById('sidebarTimerBar')?.classList.toggle('hidden',!show); },
+  init() { const t=DB.timer(); if(t.running){this._tick();this._sb(true);} },
+};
+
+// ═══════════════════════════════════════════════
+//  NAVIGATION
+// ═══════════════════════════════════════════════
+
+const NAV = [
+  { id:'dashboard', icon:'🏠', label:'Dashboard'  },
+  { id:'timer',     icon:'⏱',  label:'Timer'       },
+  { id:'log',       icon:'📋', label:'Time Log'    },
+  { id:'expenses',  icon:'💰', label:'Expenses'    },
+  { id:'clients',   icon:'🏢', label:'Clients'     },
+  { id:'backlog',   icon:'📌', label:'Backlog'     },
+  { id:'reports',   icon:'📊', label:'Reports'     },
+  { id:'settings',  icon:'⚙️', label:'Settings'    },
+];
+const ADD_VIEWS = new Set(['log','expenses','clients','backlog']);
+
+function renderNav() {
+  document.getElementById('sidebarNav').innerHTML = NAV.map(n=>`
+    <button onclick="navigate('${n.id}')" class="sidebar-link w-full flex items-center gap-3 px-3 py-2.5 text-sm mb-0.5 text-gray-400 ${State.view===n.id?'active':''}">
+      <span class="nav-icon text-base">${n.icon}</span><span>${n.label}</span>
+    </button>`).join('');
+}
+
+function navigate(v) {
+  if(v !== 'backlog') State.groomMode = false;
+  State.view = v;
+  const titles = {dashboard:'Dashboard',timer:'Timer',log:'Time Log',expenses:'Expenses',clients:'Clients',backlog:'Backlog',reports:'Reports',settings:'Settings'};
+  document.getElementById('pageTitle').textContent = titles[v]||'';
+  const btn = document.getElementById('headerAddBtn');
+  if(ADD_VIEWS.has(v)){ btn.classList.remove('hidden'); btn.onclick=()=>showAddModal(); }
+  else btn.classList.add('hidden');
+  renderNav(); render();
+  // Background refresh: pull fresh data then re-render quietly
+  syncAll().then(() => render()).catch(() => {});
+}
+
+function showAddModal() {
+  const m={log:showTimeModal,expenses:showExpenseModal,clients:showClientModal,backlog:showBacklogModal};
+  (m[State.view]||showTimeModal)();
+}
+
+// ═══════════════════════════════════════════════
+//  VIEW: DASHBOARD
+// ═══════════════════════════════════════════════
+
+function renderDashboard() {
+  const tStr=todayStr(), now=new Date();
+  const dow=now.getDay(), mon=new Date(now);
+  mon.setDate(now.getDate()-(dow===0?6:dow-1));
+  const weekStart=mon.toISOString().slice(0,10), monthStart=firstOfMonth();
+  const allTime=DB.time(), allExp=DB.exps();
+  const clients=DB.clients();
+
+  const todayHrs = allTime.filter(e=>e.date===tStr).reduce((s,e)=>s+e.hours,0);
+  const weekHrs  = allTime.filter(e=>e.date>=weekStart).reduce((s,e)=>s+e.hours,0);
+  const monthHrs = allTime.filter(e=>e.date>=monthStart).reduce((s,e)=>s+e.hours,0);
+  const monthExp = allExp.filter(e=>e.date>=monthStart).reduce((s,e)=>s+(e.amount||0),0);
+  const monthLabel = now.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+
+  if(clients.length===0) return `
+    <div class="card p-10 text-center text-gray-400">
+      <div class="text-4xl mb-3">🏢</div>
+      <div class="font-medium text-gray-600 mb-1">No clients yet</div>
+      <div class="text-sm mb-4">Add your clients and R&D groups — they'll appear here as rows to log against.</div>
+      <button onclick="showClientModal()" class="btn-primary px-5 py-2.5 rounded-lg text-sm font-medium">+ Add first client</button>
+    </div>`;
+
+  return `
+    <div class="card overflow-hidden mb-4">
+      <div class="dash-row-grid border-b border-gray-200 bg-gray-50 px-4 py-2 no-print">
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Client — ${monthLabel}</div>
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Log</div>
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount</div>
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Project</div>
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Task / item</div>
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Note / detail</div>
+        <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</div>
+        <div></div>
+      </div>
+      ${clients.map(c=>renderDashClientRow(c,allTime,allExp,monthStart)).join('')}
+    </div>
+
+    <div class="grid grid-cols-3 gap-4">
+      <div class="card p-4">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Today</span>
+          <span class="text-xs font-semibold text-gray-800">${fmtHours(todayHrs)}</span>
+        </div>
+        ${buildBarChart(allTime.filter(e=>e.date===tStr), clients)}
+      </div>
+      <div class="card p-4">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">This Week</span>
+          <span class="text-xs font-semibold text-gray-800">${fmtHours(weekHrs)}</span>
+        </div>
+        ${buildBarChart(allTime.filter(e=>e.date>=weekStart), clients)}
+      </div>
+      <div class="card p-4">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">${monthLabel}</span>
+          <span class="text-xs font-semibold text-gray-800">${fmtHours(monthHrs)}</span>
+        </div>
+        ${buildBarChart(allTime.filter(e=>e.date>=monthStart), clients)}
+      </div>
+    </div>
+    <div class="mt-2 flex justify-between items-center">
+      ${monthExp>0?`<span class="text-xs text-gray-400">Expenses this month: <span class="font-medium text-gray-600">${fmtMoney(monthExp)}</span></span>`:'<span></span>'}
+      <button onclick="navigate('reports')" class="text-xs text-teal-600 hover:underline">Full report →</button>
+    </div>
+  `;
+}
+
+function buildBarChart(entries, clients) {
+  const data = clients.map(c=>({
+    name: c.name, color: c.color||'#6366F1',
+    hrs: entries.filter(e=>e.clientId===c.id).reduce((s,e)=>s+e.hours,0)
+  })).filter(d=>d.hrs>0);
+
+  if(data.length===0) return `<div class="flex items-center justify-center text-xs text-gray-300 py-5">No entries</div>`;
+
+  const W=280, chartH=70, padT=18, padB=26;
+  const H=chartH+padT+padB;
+  const n=data.length, gap=10;
+  const barW=Math.min(40, Math.floor((W - gap*(n-1)) / n));
+  const totalBarsW=n*barW+(n-1)*gap;
+  const startX=(W-totalBarsW)/2;
+  const maxHrs=Math.max(...data.map(d=>d.hrs));
+
+  const bars=data.map((d,i)=>{
+    const bh=Math.max(4, (d.hrs/maxHrs)*chartH);
+    const x=startX+i*(barW+gap);
+    const y=padT+chartH-bh;
+    const cx=(x+barW/2).toFixed(1);
+    const lbl=d.hrs<1?Math.round(d.hrs*60)+'m':fmtHours(d.hrs);
+    const nm=d.name.length>9?d.name.slice(0,8)+'…':d.name;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${bh.toFixed(1)}" rx="3" fill="${d.color}" opacity="0.82"/>
+      <text x="${cx}" y="${(y-3).toFixed(1)}" text-anchor="middle" font-size="9.5" fill="#374151" font-weight="600" font-family="-apple-system,sans-serif">${lbl}</text>
+      <text x="${cx}" y="${(H-3).toFixed(1)}" text-anchor="middle" font-size="9" fill="#9CA3AF" font-family="-apple-system,sans-serif">${nm}</text>`;
+  }).join('');
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" xmlns="http://www.w3.org/2000/svg">${bars}</svg>`;
+}
+
+function renderDashClientRow(client, allTime, allExp, monthStart) {
+  const key    = sanitizeKey(client.id);
+  const isExp  = State.expanded.has(client.id);
+  const subPs  = DB.projs(client.id);
+  const mHrs   = allTime.filter(e=>e.clientId===client.id&&e.date>=monthStart).reduce((s,e)=>s+e.hours,0);
+  const mExpT  = allExp.filter(e=>e.clientId===client.id&&e.date>=monthStart).reduce((s,e)=>s+(e.amount||0),0);
+  const statLine=[mHrs>0?fmtHours(mHrs)+' hrs':'',mExpT>0?fmtMoney(mExpT):''].filter(Boolean).join(' · ')||'no activity';
+
+  const pSel = `<option value="">— none —</option>`
+    + subPs.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')
+    + `<option value="__new__">+ Add project…</option>`;
+
+  return `
+    <div>
+      <div class="dash-row-grid px-4 py-2.5 border-b border-gray-100 hover:bg-gray-50/40 transition-colors">
+        <button class="flex items-center gap-2 text-left w-full rounded-md py-1.5 px-2 -ml-1 min-w-0" style="background:${client.color||'#6366F1'};" onclick="toggleExpand('${client.id}')">
+          <span class="text-white/60 text-xs flex-shrink-0 inline-block transition-transform duration-150" style="transform:rotate(${isExp?'90':'0'}deg)">▶</span>
+          <div class="min-w-0">
+            <div class="text-sm font-bold text-white leading-tight">${esc(client.name)}</div>
+            <div class="text-xs text-white/65 truncate">${statLine}</div>
+          </div>
+        </button>
+
+        <select id="${key}_type" onchange="onLogTypeChange('${key}')" class="py-1.5 text-sm">
+          <option value="time">Time</option>
+          <option value="expense">Expense</option>
+          <option value="backlog">Backlog item</option>
+        </select>
+
+        <div class="relative">
+          <span id="${key}_pfx" class="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs pointer-events-none hidden select-none">$</span>
+          <input type="number" id="${key}_amt" step="0.25" min="0" placeholder="hrs" class="py-1.5 text-sm w-full" style="padding-left:0.55rem">
+        </div>
+
+        <select id="${key}_proj" onchange="onDashProjChange('${key}','${client.id}')" class="py-1.5 text-sm">${pSel}</select>
+
+        <input type="text" id="${key}_what" placeholder="task or item" class="py-1.5 text-sm"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('${key}_note')?.focus();}">
+
+        <input type="text" id="${key}_note" placeholder="note or detail…" class="py-1.5 text-sm">
+
+        <input type="date" id="${key}_date" value="${todayStr()}" class="py-1.5 text-sm">
+
+        <button onclick="submitClientLog('${client.id}')" class="btn-primary py-2 rounded-lg text-xs font-semibold w-full">+ Log</button>
+      </div>
+      ${isExp ? renderDashExpanded(client, allTime, allExp, monthStart) : ''}
+    </div>`;
+}
+
+function renderDashExpanded(client, allTime, allExp, monthStart) {
+  const subPs  = DB.projs(client.id);
+  const mTime  = allTime.filter(e=>e.clientId===client.id&&e.date>=monthStart);
+  const mExp   = allExp.filter(e=>e.clientId===client.id&&e.date>=monthStart);
+
+  // Bin by project (including null = no project)
+  const projMap = {};
+  mTime.forEach(e=>{
+    const k=e.projectId||'__none__';
+    projMap[k]=projMap[k]||{hrs:0,exp:0,days:{}};
+    projMap[k].hrs+=e.hours;
+    const day=parseInt(e.date.slice(8),10);
+    projMap[k].days[day]=(projMap[k].days[day]||0)+e.hours;
+  });
+  mExp.forEach(e=>{ const k=e.projectId||'__none__'; projMap[k]=projMap[k]||{hrs:0,exp:0,days:{}}; projMap[k].exp+=(e.amount||0); });
+
+  const hasData = Object.keys(projMap).length>0;
+
+  return `
+    <div class="border-b border-gray-100 bg-gray-50/60 px-8 py-3">
+      ${!hasData ? '<p class="text-xs text-gray-400 italic mb-2">No activity this month</p>' :
+        Object.entries(projMap).map(([k,v])=>{
+          const p = k==='__none__' ? null : DB.proj(k);
+          const effRate = p?.rate ?? client.rate ?? null;
+          const rateHint = effRate ? `<span class="text-gray-400 ml-1">${fmtMoney(effRate)}/hr${p?.rateLabel?' · '+esc(p.rateLabel):''}</span>` : '';
+          const label = p ? `${esc(p.name)}${rateHint}` : '<span class="italic text-gray-400">no project</span>';
+          const dot = p ? `<span class="w-1.5 h-1.5 rounded-full flex-shrink-0 inline-block bg-gray-400" style="background:${client.color||'#6366F1'}"></span>` : '';
+          const dayDots=Object.keys(v.days||{}).map(Number).sort((a,b)=>a-b).map(d=>{
+            const h=v.days[d];
+            return `<span title="Day ${d}: ${fmtHours(h)}" style="display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:9999px;background:${client.color||'#6366F1'};opacity:0.72;font-size:8.5px;font-weight:700;color:white;flex-shrink:0;cursor:default">${d}</span>`;
+          }).join('');
+          return `<div class="flex items-center gap-2.5 py-1 text-xs flex-wrap">
+            ${dot}
+            <span class="font-medium text-gray-700 w-36 truncate flex-shrink-0">${label}</span>
+            ${v.hrs>0?`<span class="text-gray-600 font-semibold flex-shrink-0">${fmtHours(v.hrs)} <span class="text-gray-400 font-normal">hrs</span></span>`:''}
+            ${v.exp>0?`<span class="text-gray-500 flex-shrink-0">${fmtMoney(v.exp)} exp</span>`:''}
+            ${dayDots?`<div class="flex gap-1 flex-wrap ml-1">${dayDots}</div>`:''}
+          </div>`;
+        }).join('')
+      }
+      <div class="flex gap-4 mt-2 pt-2 border-t border-gray-200/60">
+        <button onclick="navigate('log')" class="text-xs text-teal-600 hover:underline">View entries →</button>
+        <button onclick="showAddProjectModal('${client.id}')" class="text-xs text-gray-400 hover:text-gray-700 hover:underline">+ Add project</button>
+      </div>
+    </div>`;
+}
+
+function toggleExpand(clientId) {
+  if(State.expanded.has(clientId)) State.expanded.delete(clientId);
+  else State.expanded.add(clientId);
+  render();
+}
+
+function onLogTypeChange(key) {
+  const type=document.getElementById(`${key}_type`)?.value;
+  const amtEl=document.getElementById(`${key}_amt`);
+  const pfxEl=document.getElementById(`${key}_pfx`);
+  const whatEl=document.getElementById(`${key}_what`);
+  if(!amtEl)return;
+  if(type==='time')       { amtEl.placeholder='hrs'; amtEl.disabled=false; amtEl.step='0.25'; amtEl.style.paddingLeft='0.55rem'; pfxEl?.classList.add('hidden'); if(whatEl)whatEl.placeholder='task or item'; }
+  else if(type==='expense'){ amtEl.placeholder='0.00'; amtEl.disabled=false; amtEl.step='0.01'; amtEl.style.paddingLeft='1.25rem'; pfxEl?.classList.remove('hidden'); if(whatEl)whatEl.placeholder='what was purchased'; }
+  else                    { amtEl.value=''; amtEl.placeholder='N/A'; amtEl.disabled=true; amtEl.style.paddingLeft='0.55rem'; pfxEl?.classList.add('hidden'); if(whatEl)whatEl.placeholder='item title (required)'; }
+}
+
+function onDashProjChange(key, clientId) {
+  const sel=document.getElementById(`${key}_proj`);
+  if(sel?.value==='__new__') { sel.value=''; showAddProjectModal(clientId, key); }
+}
+
+function submitClientLog(clientId) {
+  const key    = sanitizeKey(clientId);
+  const type   = document.getElementById(`${key}_type`)?.value;
+  const amt    = document.getElementById(`${key}_amt`)?.value;
+  const projId = document.getElementById(`${key}_proj`)?.value || null;
+  const what   = (document.getElementById(`${key}_what`)?.value||'').trim();
+  const note   = (document.getElementById(`${key}_note`)?.value||'').trim();
+  const date   = document.getElementById(`${key}_date`)?.value || todayStr();
+  const notes  = [what,note].filter(Boolean).join(' — ');
+  const userId = State.activeUser?.id||'';
+
+  if(type==='time') {
+    const hours=parseFloat(amt);
+    if(!hours||hours<=0){toast('Enter hours','err');return;}
+    DB.addTime({userId,clientId,projectId:projId,date,hours,notes,billable:true,createdAt:new Date().toISOString()});
+    toast('Time logged ✓');
+  } else if(type==='expense') {
+    const amount=parseFloat(amt);
+    if(!amount||amount<=0){toast('Enter an amount','err');return;}
+    DB.addExp({userId,clientId,projectId:projId,date,amount,category:'Other',notes,billable:true,createdAt:new Date().toISOString()});
+    toast('Expense logged ✓');
+  } else {
+    if(!what){toast('Enter an item title','err');return;}
+    const bl=DB.backlog();
+    const now=new Date().toISOString();
+    bl.push({id:uid(),title:what,description:note,priority:'medium',clientId,projectId:projId,weekOf:null,archivedAt:null,createdAt:now,lastTouchedAt:now});
+    DB.saveBack(bl);
+    toast('Backlog item added ✓');
+  }
+  ['_amt','_what','_note'].forEach(s=>{ const el=document.getElementById(`${key}${s}`); if(el){el.value='';el.disabled=false;} });
+  onLogTypeChange(key);
+  render();
+}
+
+// ═══════════════════════════════════════════════
+//  VIEW: TIMER
+// ═══════════════════════════════════════════════
+
+function renderTimer() {
+  const t=DB.timer(), elapsed=TimerEngine.elapsed(), d=fmtSecs(elapsed);
+  const todayE=DB.time().filter(e=>e.date===todayStr()).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  const todayHrs=todayE.reduce((s,e)=>s+e.hours,0);
+  document.getElementById('sidebarTimerBar')?.classList.toggle('hidden',!t.running);
+  return `
+    <div class="max-w-xl mx-auto">
+      <div class="card p-8 mb-5 text-center">
+        <div id="timerDisplay" class="timer-display ${t.running?'timer-running':'text-gray-900'} mb-6">${d}</div>
+        <div class="mb-3 flex justify-center">
+          <select id="timerClient" onchange="syncTimerClient()" class="text-sm text-center py-2 px-3 max-w-xs" style="text-align-last:center">
+            ${clientOpts(t.clientId,'— select a client —')}
+          </select>
+        </div>
+        <div class="mb-3 flex justify-center">
+          <select id="timerProj" onchange="syncTimerProj()" class="text-sm text-center py-2 px-3 max-w-xs" style="text-align-last:center">
+            ${projOpts(t.clientId, t.projectId, '— no project —')}
+          </select>
+        </div>
+        <div class="mb-6 flex justify-center">
+          <input type="text" id="timerNotes" value="${esc(t.notes||'')}" oninput="syncTimerNotes()" onchange="syncTimerNotes()" placeholder="What are you working on?" class="text-sm text-center py-2 max-w-xs border-transparent bg-gray-50 focus:border-teal-400">
+        </div>
+        <div class="flex items-center justify-center gap-3">
+          ${!t.running?`<button onclick="startTimer()" class="btn-primary px-8 py-3 rounded-xl text-base font-semibold">▶ Start</button>`:`<button onclick="pauseTimer()" class="btn-danger px-8 py-3 rounded-xl text-base font-semibold">⏸ Pause</button>`}
+          ${elapsed>0?`<button onclick="saveTimer()" class="btn-secondary px-5 py-3 rounded-xl text-base font-semibold">💾 Save</button><button onclick="resetTimer()" class="text-gray-400 hover:text-gray-600 px-4 py-3 rounded-xl text-sm border border-transparent hover:border-gray-200">✕ Reset</button>`:''}
+        </div>
+      </div>
+      <div class="flex justify-between items-center mb-2.5">
+        <div class="text-sm font-semibold text-gray-600">Today — ${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}</div>
+        <div class="text-sm text-teal-600 font-semibold">${fmtHours(todayHrs)} tracked</div>
+      </div>
+      ${todayE.length===0
+        ?`<div class="card p-6 text-center text-gray-400 text-sm">No entries today — start the timer or <button onclick="showTimeModal()" class="text-teal-600 hover:underline font-medium">log time manually</button></div>`
+        :`<div class="card overflow-hidden">${todayE.map(entryRow).join('')}</div>`}
+    </div>`;
+}
+
+function startTimer() { const c=document.getElementById('timerClient')?.value||'', p=document.getElementById('timerProj')?.value||'', n=document.getElementById('timerNotes')?.value||''; TimerEngine.start(c,p,n); render(); }
+function pauseTimer()  { TimerEngine.pause(); }
+function resetTimer()  { if(confirm('Reset the timer?'))TimerEngine.reset(); }
+function saveTimer()   { TimerEngine.save(); }
+function syncTimerClient() { const t=DB.timer(); t.clientId=document.getElementById('timerClient')?.value||''; t.projectId=''; DB.saveTimer(t); render(); }
+function syncTimerProj()   { const t=DB.timer(); t.projectId=document.getElementById('timerProj')?.value||''; DB.saveTimer(t); }
+function syncTimerNotes()  { const t=DB.timer(); t.notes=document.getElementById('timerNotes')?.value||''; DB.saveTimer(t); }
+
+// ═══════════════════════════════════════════════
+//  VIEW: TIME LOG
+// ═══════════════════════════════════════════════
+
+function renderLog() {
+  const f=State.filters.log;
+  let entries=DB.time().sort((a,b)=>b.date.localeCompare(a.date)||(b.createdAt||'').localeCompare(a.createdAt||''));
+  if(f.client)  entries=entries.filter(e=>e.clientId===f.client);
+  if(f.project) entries=entries.filter(e=>e.projectId===f.project);
+  if(f.user)    entries=entries.filter(e=>e.userId===f.user);
+  if(f.from)    entries=entries.filter(e=>e.date>=f.from);
+  if(f.to)      entries=entries.filter(e=>e.date<=f.to);
+  const grouped=groupBy(entries,'date'), dates=Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
+  const total=entries.reduce((s,e)=>s+e.hours,0);
+  return `
+    <div class="card p-4 mb-4 no-print">
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div><label>Client</label><select onchange="setFilter('log','client',this.value)" class="py-1.5"><option value="">All clients</option>${clientOpts(f.client,'').replace('<option value="">Select client…</option>','')}</select></div>
+        <div><label>Project</label><select onchange="setFilter('log','project',this.value)" class="py-1.5"><option value="">All projects</option>${projOpts(f.client,f.project,'').replace('<option value="">— no project —</option>','')}</select></div>
+        <div><label>User</label><select onchange="setFilter('log','user',this.value)" class="py-1.5"><option value="">All users</option>${userOpts(f.user)}</select></div>
+        <div><label>From</label><input type="date" value="${f.from}" onchange="setFilter('log','from',this.value)" class="py-1.5"></div>
+        <div><label>To</label><input type="date" value="${f.to}" onchange="setFilter('log','to',this.value)" class="py-1.5"></div>
+      </div>
+    </div>
+    <div class="flex justify-between items-center mb-3">
+      <span class="text-sm text-gray-500">${entries.length} entr${entries.length===1?'y':'ies'}</span>
+      <span class="text-sm font-semibold text-gray-700">${fmtHours(total)} total</span>
+    </div>
+    ${dates.length===0 ? emptyState('📋','No time entries yet') :
+      dates.map(date=>`
+        <div class="mb-4">
+          <div class="flex justify-between items-center mb-2">
+            <span class="text-sm font-semibold text-gray-700">${fmtDate(date)}</span>
+            <span class="text-xs text-gray-400">${fmtHours(grouped[date].reduce((s,e)=>s+e.hours,0))}</span>
+          </div>
+          <div class="card overflow-hidden">${grouped[date].map(entryRow).join('')}</div>
+        </div>`).join('')
+    }`;
+}
+
+function entryRow(entry) {
+  const client=DB.client(entry.clientId);
+  const proj=entry.projectId?DB.proj(entry.projectId):null;
+  const user=DB.users().find(u=>u.id===entry.userId);
+  return `
+    <div class="entry-row px-4 py-3 flex items-center gap-3">
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-gray-800 truncate">
+          ${client?`<span style="color:${client.color||'#6366F1'}" class="mr-1">●</span>${esc(client.name)}`:'<span class="text-gray-400 italic text-xs">No client</span>'}
+          ${proj?`<span class="text-gray-400 mx-1.5">›</span><span class="text-gray-600">${esc(proj.name)}</span>`:''}
+        </div>
+        ${entry.notes?`<div class="text-xs text-gray-400 truncate mt-0.5">${esc(entry.notes)}</div>`:''}
+      </div>
+      ${user?`<span class="text-xs text-gray-400 hidden sm:block flex-shrink-0">${esc(user.name)}</span>`:''}
+      <span class="text-xs ${entry.billable?'text-teal-500 font-semibold':'text-gray-300'}" title="${entry.billable?'Billable':'Non-billable'}">$</span>
+      <span class="text-sm font-semibold text-gray-700 w-10 text-right flex-shrink-0">${fmtHours(entry.hours)}</span>
+      <div class="flex gap-0.5 flex-shrink-0">
+        <button onclick="editTimeEntry('${entry.id}')" class="p-1.5 text-gray-300 hover:text-gray-600 rounded">✏️</button>
+        <button onclick="delTimeEntry('${entry.id}')" class="p-1.5 text-gray-300 hover:text-red-500 rounded">🗑</button>
+      </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════
+//  VIEW: EXPENSES
+// ═══════════════════════════════════════════════
+
+const EXP_CATS = ['Travel','Meals','Software','Hardware','Office','Marketing','Subcontractor','Materials','Other'];
+
+function renderExpenses() {
+  const f=State.filters.expenses;
+  let exps=DB.exps().sort((a,b)=>b.date.localeCompare(a.date)||(b.createdAt||'').localeCompare(a.createdAt||''));
+  if(f.client) exps=exps.filter(e=>e.clientId===f.client);
+  if(f.from)   exps=exps.filter(e=>e.date>=f.from);
+  if(f.to)     exps=exps.filter(e=>e.date<=f.to);
+  const grouped=groupBy(exps,'date'), dates=Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
+  const total=exps.reduce((s,e)=>s+(e.amount||0),0);
+  return `
+    <div class="card p-4 mb-4 no-print">
+      <div class="grid grid-cols-3 gap-3">
+        <div><label>Client</label><select onchange="setFilter('expenses','client',this.value)" class="py-1.5"><option value="">All clients</option>${clientOpts(f.client,'').replace('<option value="">Select client…</option>','')}</select></div>
+        <div><label>From</label><input type="date" value="${f.from}" onchange="setFilter('expenses','from',this.value)" class="py-1.5"></div>
+        <div><label>To</label><input type="date" value="${f.to}" onchange="setFilter('expenses','to',this.value)" class="py-1.5"></div>
+      </div>
+    </div>
+    <div class="flex justify-between items-center mb-3">
+      <span class="text-sm text-gray-500">${exps.length} expense${exps.length===1?'':'s'}</span>
+      <span class="text-sm font-semibold text-gray-700">Total: ${fmtMoney(total)}</span>
+    </div>
+    ${dates.length===0 ? emptyState('💰','No expenses yet') :
+      dates.map(date=>`
+        <div class="mb-4">
+          <div class="flex justify-between items-center mb-2">
+            <span class="text-sm font-semibold text-gray-700">${fmtDate(date)}</span>
+            <span class="text-xs text-gray-400">${fmtMoney(grouped[date].reduce((s,e)=>s+(e.amount||0),0))}</span>
+          </div>
+          <div class="card overflow-hidden">${grouped[date].map(expRow).join('')}</div>
+        </div>`).join('')
+    }`;
+}
+
+function expRow(exp) {
+  const client=DB.client(exp.clientId);
+  const proj=exp.projectId?DB.proj(exp.projectId):null;
+  return `
+    <div class="entry-row px-4 py-3 flex items-center gap-3">
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-gray-800 truncate">
+          ${client?`<span style="color:${client.color||'#6366F1'}" class="mr-1">●</span>${esc(client.name)}`:'<span class="text-gray-400 italic text-xs">No client</span>'}
+          ${proj?`<span class="text-gray-400 mx-1.5">›</span><span class="text-gray-600">${esc(proj.name)}</span>`:''}
+        </div>
+        <div class="text-xs text-gray-400 mt-0.5">${esc(exp.category||'Other')}${exp.notes?' · '+esc(exp.notes):''}</div>
+      </div>
+      <span class="text-xs ${exp.billable?'text-teal-500 font-semibold':'text-gray-300'}">$</span>
+      <span class="text-sm font-semibold text-gray-700 w-20 text-right flex-shrink-0">${fmtMoney(exp.amount)}</span>
+      <div class="flex gap-0.5 flex-shrink-0">
+        <button onclick="editExpense('${exp.id}')" class="p-1.5 text-gray-300 hover:text-gray-600 rounded">✏️</button>
+        <button onclick="delExpense('${exp.id}')" class="p-1.5 text-gray-300 hover:text-red-500 rounded">🗑</button>
+      </div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════
+//  VIEW: CLIENTS
+// ═══════════════════════════════════════════════
+
+function renderClients() {
+  const clients=DB.clients(true);
+  const active=clients.filter(c=>c.status!=='archived');
+  const archived=clients.filter(c=>c.status==='archived');
+  const allTime=DB.time(), allExp=DB.exps();
+
+  function clientCard(c) {
+    const isArch=c.status==='archived';
+    const hrs=allTime.filter(e=>e.clientId===c.id).reduce((s,e)=>s+e.hours,0);
+    const expT=allExp.filter(e=>e.clientId===c.id).reduce((s,e)=>s+(e.amount||0),0);
+    const subPs=DB.projs(c.id);
+    return `
+      <div class="card p-4 ${isArch?'opacity-60':''}">
+        <div class="flex items-start gap-3">
+          <div class="w-3.5 h-3.5 rounded-full flex-shrink-0 mt-1" style="background:${c.color||'#6366F1'}"></div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center flex-wrap gap-1.5 mb-1">
+              <span class="font-semibold text-gray-800">${esc(c.name)}</span>
+              ${getBadge(c.type)}
+              ${isArch?'<span class="badge badge-internal">Archived</span>':''}
+              ${c.rate?`<span class="text-xs text-teal-600">${fmtMoney(c.rate)}/hr</span>`:''}
+            </div>
+            <div class="text-xs text-gray-400 mb-3">${fmtHours(hrs)} hrs all time · ${fmtMoney(expT)} expenses</div>
+
+            <!-- Sub-projects -->
+            <div class="space-y-1 mb-2">
+              ${subPs.length===0?`<p class="text-xs text-gray-400 italic">No projects yet</p>`:
+                subPs.map(p=>`
+                  <div class="flex items-center justify-between bg-gray-50 rounded px-3 py-1.5 text-sm">
+                    <div class="min-w-0">
+                      <span class="text-gray-700 font-medium">${esc(p.name)}</span>
+                      ${p.rate?`<span class="text-xs text-teal-600 ml-2">${fmtMoney(p.rate)}/hr${p.rateLabel?' · '+esc(p.rateLabel):''}</span>`:p.rateLabel?`<span class="text-xs text-gray-400 ml-2">${esc(p.rateLabel)}</span>`:''}
+                    </div>
+                    <div class="flex gap-0.5 ml-2 flex-shrink-0">
+                      <button onclick="showEditProjectModal('${p.id}')" class="p-1 text-gray-300 hover:text-gray-600 text-xs" title="Edit">✏️</button>
+                      <button onclick="delSubProject('${p.id}')" class="p-1 text-gray-300 hover:text-red-500 text-xs" title="Delete">🗑</button>
+                    </div>
+                  </div>`).join('')
+              }
+            </div>
+            <button onclick="showAddProjectModal('${c.id}')" class="text-xs text-teal-600 hover:underline font-medium">+ Add project</button>
+          </div>
+          <div class="flex gap-0.5 flex-shrink-0">
+            <button onclick="editClient('${c.id}')" class="p-1.5 text-gray-300 hover:text-gray-600 rounded" title="Edit">✏️</button>
+            <button onclick="archiveClient('${c.id}')" class="p-1.5 text-gray-300 hover:text-gray-600 rounded" title="${isArch?'Unarchive':'Archive'}">${isArch?'📂':'🗃'}</button>
+            <button onclick="delClient('${c.id}')" class="p-1.5 text-gray-300 hover:text-red-500 rounded" title="Delete">🗑</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  return `
+    ${active.length===0 ? emptyState('🏢','No clients yet','Add clients and R&D groups — each becomes a row on the dashboard.') :
+      `<div class="space-y-3 mb-6">${active.map(clientCard).join('')}</div>`
+    }
+    ${archived.length>0?`
+      <div><div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Archived</div>
+      <div class="space-y-3">${archived.map(clientCard).join('')}</div></div>`:''}
+  `;
+}
+
+// ═══════════════════════════════════════════════
+//  VIEW: BACKLOG
+// ═══════════════════════════════════════════════
+
+function renderBacklog() {
+  if(State.groomMode) return renderGroomMode();
+  const all = DB.backlog();
+  const active = all.filter(i => !i.archivedAt);
+  const cw = currentWeek();
+  const backlogItems = active.filter(i => !i.weekOf);
+  const thisWeekItems = active.filter(i => i.weekOf === cw);
+  const staleCount = backlogItems.filter(i => itemAgedays(i) >= 30).length;
+  const priIcon = {high:'🔴',medium:'🟡',low:'🔵'};
+  const clients = DB.clients(true);
+  const clientMap = {};
+  clients.forEach(c => clientMap[c.id] = c);
+
+  // Needs Attention: overdue or urgent items (for top strip)
+  const needsAttention = backlogItems.filter(i => i.urgent || (i.dueDate && daysUntil(i.dueDate) < 0));
+  const needsAttnIds = new Set(needsAttention.map(i => i.id));
+  const regularItems = backlogItems.filter(i => !needsAttnIds.has(i.id));
+
+  // Group regular backlog by client, sort within groups
+  const byClient = {};
+  regularItems.forEach(item => {
+    const cid = item.clientId || '__none__';
+    if(!byClient[cid]) byClient[cid] = [];
+    byClient[cid].push(item);
+  });
+  Object.values(byClient).forEach(arr => arr.sort((a,b) => itemSortScore(a)-itemSortScore(b)));
+  const clientOrder = Object.keys(byClient).sort((a,b) => byClient[b].length - byClient[a].length);
+
+  function itemBadges(item) {
+    const chips = [];
+    if(item.urgent) chips.push(`<span class="text-xs font-bold text-red-500" title="Urgent">⚡</span>`);
+    if(item.effort) {
+      const effortLabel = {1:'1·xs',2:'2·sm',3:'3·md',5:'5·lg',8:'8·xl',13:'13·epic'}[item.effort]||item.effort;
+      chips.push(`<span class="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded font-mono" title="Effort">${effortLabel}</span>`);
+    }
+    if(item.recurring) {
+      const freqLabel = {weekly:'wkly',biweekly:'2wk',monthly:'mo'}[item.recurFrequency]||'↺';
+      chips.push(`<span class="text-xs text-indigo-500 font-medium" title="Recurring">↺ ${freqLabel}</span>`);
+    }
+    const dc = dueDateChip(item.dueDate);
+    if(dc) chips.push(dc);
+    return chips.length ? `<div class="flex items-center gap-1.5 mt-1.5 flex-wrap">${chips.join('')}</div>` : '';
+  }
+
+  function backlogCard(item, highlight=false) {
+    const client = clientMap[item.clientId];
+    const proj = item.projectId ? DB.proj(item.projectId) : null;
+    const age = itemAgedays(item);
+    const stale = age >= 30;
+    const borderStyle = highlight ? 'border-amber-200 bg-amber-50/30' : 'border-gray-200 bg-white';
+    return `<div class="group relative ${borderStyle} border rounded-lg px-3 py-2.5 mb-2 hover:border-gray-300 hover:shadow-sm transition-all cursor-pointer" onclick="editBacklogItem('${item.id}')">
+      <div class="flex items-start gap-2">
+        <span class="text-xs mt-0.5 flex-shrink-0">${priIcon[item.priority]||'⚪'}</span>
+        <div class="min-w-0 flex-1 pr-24">
+          <div class="text-sm font-medium text-gray-800 leading-snug">${esc(item.title)}</div>
+          ${item.description?`<div class="text-xs text-gray-400 mt-0.5 line-clamp-1">${esc(item.description)}</div>`:''}
+          ${itemBadges(item)}
+          ${proj?`<div class="text-xs text-gray-400 mt-1">${esc(proj.name)}</div>`:''}
+          ${!item.dueDate&&stale?`<div class="text-xs text-amber-500 mt-1">${age}d untouched</div>`:!item.dueDate&&age>14?`<div class="text-xs text-gray-300 mt-0.5">${age}d</div>`:''}
+        </div>
+      </div>
+      <div class="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 bg-white pl-2 shadow-[-8px_0_8px_white]">
+        <button onclick="event.stopPropagation();promoteToWeek('${item.id}')" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-2 py-1 rounded font-medium whitespace-nowrap">→ Week</button>
+        <button onclick="event.stopPropagation();archiveItem('${item.id}')" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-2 py-1 rounded">Archive</button>
+        <button onclick="event.stopPropagation();delBacklogItem('${item.id}')" class="text-xs text-red-400 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-50">✕</button>
+      </div>
+    </div>`;
+  }
+
+  function weekCard(item) {
+    const client = clientMap[item.clientId];
+    const proj = item.projectId ? DB.proj(item.projectId) : null;
+    return `<div class="group relative bg-white border border-gray-200 rounded-lg px-3 py-2.5 mb-2 hover:border-gray-300 hover:shadow-sm transition-all cursor-pointer" onclick="editBacklogItem('${item.id}')">
+      <div class="flex items-start gap-2">
+        <span class="text-xs mt-0.5 flex-shrink-0">${priIcon[item.priority]||'⚪'}</span>
+        <div class="min-w-0 flex-1 pr-28">
+          <div class="text-sm font-medium text-gray-800 leading-snug">${esc(item.title)}</div>
+          ${item.description?`<div class="text-xs text-gray-400 mt-0.5 line-clamp-1">${esc(item.description)}</div>`:''}
+          ${itemBadges(item)}
+          ${client||proj?`<div class="text-xs text-gray-400 mt-1">${client?`<span style="color:${client.color||'#6366F1'}">●</span> ${esc(client.name)}`:''}${proj?` › ${esc(proj.name)}`:''}</div>`:''}
+        </div>
+      </div>
+      <div class="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 bg-white pl-2 shadow-[-8px_0_8px_white]">
+        <button onclick="event.stopPropagation();markItemDone('${item.id}')" class="text-xs bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded font-medium">✓ Done</button>
+        <button onclick="event.stopPropagation();pullToBacklog('${item.id}')" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-2 py-1 rounded whitespace-nowrap">← Backlog</button>
+        <button onclick="event.stopPropagation();delBacklogItem('${item.id}')" class="text-xs text-red-400 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-50">✕</button>
+      </div>
+    </div>`;
+  }
+
+  const wLabel = weekLabel(cw);
+  const archivedCount = all.filter(i => i.archivedAt).length;
+
+  return `
+    <div class="flex items-center justify-between mb-5 no-print">
+      <div class="flex items-center gap-3">
+        <span class="text-sm text-gray-400">${backlogItems.length} in backlog${thisWeekItems.length?` · ${thisWeekItems.length} this week`:''}</span>
+        ${staleCount>0
+          ?`<button onclick="State.groomMode=true;render()" class="flex items-center gap-1.5 text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg border border-amber-200 font-medium transition-colors">🧹 Groom <span class="bg-amber-200 text-amber-800 rounded-full px-1.5">${staleCount} stale</span></button>`
+          :`<button onclick="State.groomMode=true;render()" class="text-xs text-gray-400 hover:text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors">🧹 Groom backlog</button>`}
+      </div>
+      ${archivedCount>0?`<button onclick="showArchive()" class="text-xs text-gray-400 hover:text-gray-600 hover:underline">Archive (${archivedCount}) ↗</button>`:''}
+    </div>
+    <div class="flex gap-6" style="align-items:start">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-bold text-gray-500 uppercase tracking-wider">Backlog</span>
+            <span class="text-xs text-gray-400">${backlogItems.length}</span>
+          </div>
+          <button onclick="showBacklogModal()" class="text-xs text-teal-600 hover:text-teal-800 font-medium">+ Add</button>
+        </div>
+        ${backlogItems.length===0
+          ?`<div class="text-center text-gray-300 text-sm py-16 border-2 border-dashed border-gray-100 rounded-xl">Backlog is clear</div>`
+          :`${needsAttention.length>0?`
+            <div class="mb-5">
+              <div class="flex items-center gap-1.5 mb-2 pb-1 border-b border-red-100">
+                <span class="text-xs font-bold text-red-500 uppercase tracking-wider">Needs Attention</span>
+                <span class="text-xs text-red-300">${needsAttention.length}</span>
+              </div>
+              ${needsAttention.sort((a,b)=>itemSortScore(a)-itemSortScore(b)).map(i=>backlogCard(i,true)).join('')}
+            </div>`:''
+          }${clientOrder.length>0?clientOrder.map(cid=>{
+            const client = clientMap[cid];
+            const items = byClient[cid];
+            if(!items||!items.length) return '';
+            return `<div class="mb-5">
+              <div class="flex items-center gap-1.5 mb-2 pb-1 border-b border-gray-100">
+                ${client?`<span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${client.color||'#6366F1'}"></span><span class="text-xs font-semibold text-gray-500">${esc(client.name)}</span>`:'<span class="text-xs font-semibold text-gray-400">No client</span>'}
+                <span class="text-xs text-gray-300 ml-1">${items.length}</span>
+              </div>
+              ${items.map(i=>backlogCard(i)).join('')}
+            </div>`;
+          }).join(''):''}`
+        }
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-xs font-bold text-gray-500 uppercase tracking-wider">This Week</span>
+          <span class="text-xs text-gray-400">${thisWeekItems.length}</span>
+          ${thisWeekItems.length>0?`<span class="text-xs text-gray-300">· ${wLabel}</span>`:''}
+        </div>
+        ${thisWeekItems.length===0
+          ?`<div class="text-center text-gray-300 text-sm py-16 border-2 border-dashed border-gray-100 rounded-xl">Pull items from backlog →</div>`
+          :thisWeekItems.map(weekCard).join('')
+        }
+      </div>
+    </div>`;
+}
+
+function renderGroomMode() {
+  const all = DB.backlog();
+  const items = all
+    .filter(i => !i.archivedAt && !i.weekOf)
+    .sort((a,b) => new Date(a.lastTouchedAt||a.createdAt||0) - new Date(b.lastTouchedAt||b.createdAt||0));
+  const clients = DB.clients(true);
+  const clientMap = {};
+  clients.forEach(c => clientMap[c.id] = c);
+  const priIcon = {high:'🔴',medium:'🟡',low:'🔵'};
+  return `
+    <div class="max-w-2xl mx-auto">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <div class="text-lg font-bold text-gray-800">Groom Backlog</div>
+          <div class="text-sm text-gray-500 mt-0.5">Oldest items first. Keep, archive (not happening soon), or delete (truly dead).</div>
+        </div>
+        <button onclick="State.groomMode=false;render()" class="btn-secondary px-4 py-2 rounded-lg text-sm">Done</button>
+      </div>
+      ${items.length===0
+        ?`<div class="text-center py-20">
+            <div class="text-4xl mb-3">✨</div>
+            <div class="text-gray-600 font-semibold">Backlog is fresh</div>
+            <div class="text-sm text-gray-400 mt-1">No items need attention</div>
+            <button onclick="State.groomMode=false;render()" class="mt-5 btn-primary px-5 py-2 rounded-lg text-sm">Back to board</button>
+          </div>`
+        :items.map(item=>{
+            const client = clientMap[item.clientId];
+            const proj = item.projectId ? DB.proj(item.projectId) : null;
+            const age = itemAgedays(item);
+            const stale = age >= 30;
+            return `<div class="card px-5 py-4 mb-3 flex items-start gap-4">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-start gap-2">
+                  <span class="text-sm mt-0.5 flex-shrink-0">${priIcon[item.priority]||'⚪'}</span>
+                  <div>
+                    <div class="text-sm font-semibold text-gray-800">${esc(item.title)}</div>
+                    ${item.description?`<div class="text-xs text-gray-400 mt-0.5">${esc(item.description)}</div>`:''}
+                    <div class="flex items-center gap-2 mt-1.5">
+                      ${client?`<span class="text-xs" style="color:${client.color||'#6366F1'}">● ${esc(client.name)}</span>`:''}
+                      ${proj?`<span class="text-xs text-gray-400">› ${esc(proj.name)}</span>`:''}
+                      <span class="text-xs ${stale?'text-amber-600 font-semibold':'text-gray-400'}">${age}d old</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <button onclick="keepItem('${item.id}')" class="btn-secondary px-3 py-1.5 rounded-lg text-xs font-medium">Keep</button>
+                <button onclick="archiveItem('${item.id}')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg font-medium">Archive</button>
+                <button onclick="delBacklogItemSilent('${item.id}')" class="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg font-medium">Delete</button>
+              </div>
+            </div>`;
+          }).join('')
+      }
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════
+//  VIEW: REPORTS
+// ═══════════════════════════════════════════════
+
+function renderReports() {
+  const f=State.filters.reports;
+  const te=DB.time().filter(e=>(!f.from||e.date>=f.from)&&(!f.to||e.date<=f.to));
+  const exp=DB.exps().filter(e=>(!f.from||e.date>=f.from)&&(!f.to||e.date<=f.to));
+  const clients=DB.clients(true);
+  const usedIds=new Set([...te.map(e=>e.clientId),...exp.map(e=>e.clientId)]);
+  const rows=clients.filter(c=>usedIds.has(c.id)).map(c=>{
+    const billable=te.filter(e=>e.clientId===c.id&&e.billable);
+    const hasAnyRate=c.rate||billable.some(e=>{const p=e.projectId?DB.proj(e.projectId):null;return p?.rate;});
+    const value=hasAnyRate?billable.reduce((s,e)=>{
+      const proj=e.projectId?DB.proj(e.projectId):null;
+      const rate=proj?.rate??c.rate??0;
+      return s+e.hours*rate;
+    },0):null;
+    return {c,hrs:te.filter(e=>e.clientId===c.id).reduce((s,e)=>s+e.hours,0),expT:exp.filter(e=>e.clientId===c.id).reduce((s,e)=>s+(e.amount||0),0),value};
+  }).sort((a,b)=>b.hrs-a.hrs);
+  const totHrs=rows.reduce((s,r)=>s+r.hrs,0),totExp=rows.reduce((s,r)=>s+r.expT,0),totVal=rows.reduce((s,r)=>s+(r.value||0),0);
+  const hasRate=rows.some(r=>r.value!==null);
+  const users=DB.users();
+  const userRows=users.map(u=>({u,hrs:te.filter(e=>e.userId===u.id).reduce((s,e)=>s+e.hours,0),exp:exp.filter(e=>e.userId===u.id).reduce((s,e)=>s+(e.amount||0),0)})).filter(r=>r.hrs>0||r.exp>0);
+  const expByCat=groupBy(exp,'category'),cats=Object.keys(expByCat).sort();
+  return `
+    <div class="card p-4 mb-5 no-print">
+      <div class="flex flex-wrap items-end gap-3">
+        <div><label>From</label><input type="date" value="${f.from}" onchange="setFilter('reports','from',this.value)" class="py-1.5"></div>
+        <div><label>To</label><input type="date" value="${f.to}" onchange="setFilter('reports','to',this.value)" class="py-1.5"></div>
+        <button onclick="setReportRange('month')" class="btn-secondary px-3 py-2 rounded-lg text-xs">This month</button>
+        <button onclick="setReportRange('lastmonth')" class="btn-secondary px-3 py-2 rounded-lg text-xs">Last month</button>
+        <button onclick="setReportRange('year')" class="btn-secondary px-3 py-2 rounded-lg text-xs">This year</button>
+        <div class="ml-auto flex gap-2">
+          <button onclick="exportCSV()" class="btn-secondary px-4 py-2 rounded-lg text-sm">⬇ CSV</button>
+          <button onclick="window.print()" class="btn-secondary px-4 py-2 rounded-lg text-sm">🖨 Print</button>
+        </div>
+      </div>
+    </div>
+    <div class="grid grid-cols-3 gap-4 mb-6">
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-gray-900">${fmtHours(totHrs)}</div><div class="text-xs text-gray-400 mt-1 uppercase tracking-wide">Hours</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-gray-900">${fmtMoney(totExp)}</div><div class="text-xs text-gray-400 mt-1 uppercase tracking-wide">Expenses</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-teal-600">${hasRate?fmtMoney(totVal):'—'}</div><div class="text-xs text-gray-400 mt-1 uppercase tracking-wide">Billed Value</div></div>
+    </div>
+    <div class="mb-6">
+      <div class="text-sm font-semibold text-gray-700 mb-3">By Client</div>
+      ${rows.length===0?`<div class="card p-5 text-center text-gray-400 text-sm">No activity in this period</div>`:`
+        <div class="card overflow-hidden">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b border-gray-100 text-xs text-gray-500 font-semibold uppercase tracking-wide">
+              <th class="text-left px-4 py-3">Client</th><th class="text-left px-4 py-3">Type</th>
+              <th class="text-right px-4 py-3">Hours</th><th class="text-right px-4 py-3">Expenses</th>
+              ${hasRate?'<th class="text-right px-4 py-3">Value</th>':''}
+            </tr></thead>
+            <tbody>
+              ${rows.map(r=>`<tr class="border-b border-gray-50 hover:bg-gray-50">
+                <td class="px-4 py-3"><span style="color:${r.c.color||'#6366F1'}">●</span><span class="font-medium text-gray-800 ml-1.5">${esc(r.c.name)}</span></td>
+                <td class="px-4 py-3">${getBadge(r.c.type)}</td>
+                <td class="px-4 py-3 text-right text-gray-700">${fmtHours(r.hrs)}</td>
+                <td class="px-4 py-3 text-right text-gray-700">${fmtMoney(r.expT)}</td>
+                ${hasRate?`<td class="px-4 py-3 text-right text-gray-700">${r.value!==null?fmtMoney(r.value):'—'}</td>`:''}
+              </tr>`).join('')}
+              <tr class="bg-gray-50 font-semibold text-gray-700 border-t border-gray-200">
+                <td class="px-4 py-3" colspan="2">Total</td>
+                <td class="px-4 py-3 text-right">${fmtHours(totHrs)}</td><td class="px-4 py-3 text-right">${fmtMoney(totExp)}</td>
+                ${hasRate?`<td class="px-4 py-3 text-right">${fmtMoney(totVal)}</td>`:''}
+              </tr>
+            </tbody>
+          </table>
+        </div>`}
+    </div>
+    ${userRows.length>1?`
+      <div class="mb-6"><div class="text-sm font-semibold text-gray-700 mb-3">By Team Member</div>
+        <div class="card overflow-hidden"><table class="w-full text-sm">
+          <thead><tr class="border-b border-gray-100 text-xs text-gray-500 font-semibold uppercase tracking-wide">
+            <th class="text-left px-4 py-3">Name</th><th class="text-right px-4 py-3">Hours</th><th class="text-right px-4 py-3">Expenses</th>
+          </tr></thead><tbody>
+          ${userRows.map(r=>`<tr class="border-b border-gray-50 hover:bg-gray-50">
+            <td class="px-4 py-3"><span class="inline-flex items-center justify-center w-6 h-6 rounded-full text-white text-xs font-bold mr-2" style="background:${r.u.color||'#6366F1'}">${r.u.name.charAt(0).toUpperCase()}</span><span class="font-medium text-gray-800">${esc(r.u.name)}</span></td>
+            <td class="px-4 py-3 text-right text-gray-700">${fmtHours(r.hrs)}</td><td class="px-4 py-3 text-right text-gray-700">${fmtMoney(r.exp)}</td>
+          </tr>`).join('')}
+          </tbody></table></div></div>`:''}
+    ${cats.length>0?`
+      <div><div class="text-sm font-semibold text-gray-700 mb-3">Expense Categories</div>
+        <div class="card overflow-hidden"><table class="w-full text-sm">
+          <thead><tr class="border-b border-gray-100 text-xs text-gray-500 font-semibold uppercase tracking-wide">
+            <th class="text-left px-4 py-3">Category</th><th class="text-right px-4 py-3">Count</th><th class="text-right px-4 py-3">Total</th>
+          </tr></thead><tbody>
+          ${cats.map(c=>`<tr class="border-b border-gray-50 hover:bg-gray-50">
+            <td class="px-4 py-3 text-gray-800">${esc(c||'Other')}</td>
+            <td class="px-4 py-3 text-right text-gray-500">${expByCat[c].length}</td>
+            <td class="px-4 py-3 text-right font-medium text-gray-700">${fmtMoney(expByCat[c].reduce((s,e)=>s+(e.amount||0),0))}</td>
+          </tr>`).join('')}
+          </tbody></table></div></div>`:''}
+  `;
+}
+
+function setReportRange(r) {
+  const n=new Date(), yr=n.getFullYear(), mo=n.getMonth();
+  let from,to;
+  if(r==='month'){from=`${yr}-${String(mo+1).padStart(2,'0')}-01`;to=`${yr}-${String(mo+1).padStart(2,'0')}-${String(new Date(yr,mo+1,0).getDate()).padStart(2,'0')}`;}
+  else if(r==='lastmonth'){const lm=new Date(yr,mo,0);from=`${lm.getFullYear()}-${String(lm.getMonth()+1).padStart(2,'0')}-01`;to=`${lm.getFullYear()}-${String(lm.getMonth()+1).padStart(2,'0')}-${String(lm.getDate()).padStart(2,'0')}`;}
+  else{from=`${yr}-01-01`;to=`${yr}-12-31`;}
+  State.filters.reports.from=from; State.filters.reports.to=to; render();
+}
+
+function exportCSV() {
+  const f=State.filters.reports;
+  const te=DB.time().filter(e=>(!f.from||e.date>=f.from)&&(!f.to||e.date<=f.to));
+  const us=DB.users(); let csv='Date,User,Client,Project,Rate,Hours,Notes,Billable\n';
+  te.sort((a,b)=>a.date.localeCompare(b.date)).forEach(e=>{
+    const c=DB.client(e.clientId), p=e.projectId?DB.proj(e.projectId):null, u=us.find(u=>u.id===e.userId);
+    const rate=p?.rate??c?.rate??'';
+    csv+=[e.date,u?.name||'',c?.name||'',p?.name||'',rate,e.hours,`"${(e.notes||'').replace(/"/g,'""')}"`,e.billable?'Yes':'No'].join(',')+'\n';
+  });
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download=`tempo-${f.from||'all'}-to-${f.to||'all'}.csv`; a.click(); toast('CSV exported ✓');
+}
+
+// ═══════════════════════════════════════════════
+//  VIEW: SETTINGS
+// ═══════════════════════════════════════════════
+
+function renderSettings() {
+  const users=DB.users(), settings=DB.settings();
+  const authEmail = _sb.auth.getUser ? '' : ''; // resolved async below — placeholder
+  // Grab cached session email synchronously if available
+  let sessionEmail = '';
+  try { sessionEmail = _sb.auth.currentSession?.user?.email || ''; } catch {}
+  return `
+    <div class="max-w-lg space-y-4">
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-1">
+          <div class="font-semibold text-gray-800">Account</div>
+        </div>
+        <div id="accountInfo" class="text-sm text-gray-500 mb-3">Loading…</div>
+        <button onclick="signOut()" class="btn-secondary px-4 py-2 rounded-lg text-sm text-red-600 border-red-200 hover:bg-red-50">Sign out</button>
+      </div>
+      <div class="card p-5">
+        <div class="font-semibold text-gray-800 mb-4">Team Members</div>
+        <div class="space-y-2 mb-4">
+          ${users.length===0?'<p class="text-sm text-gray-400">No team members yet.</p>':
+            users.map(u=>`<div class="flex items-center gap-3 p-2.5 rounded-lg bg-gray-50">
+              <div class="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0" style="background:${u.color||'#6366F1'}">${u.name.charAt(0).toUpperCase()}</div>
+              <div class="flex-1 text-sm font-medium text-gray-700">${esc(u.name)}</div>
+              ${u.id===settings.activeUserId?'<span class="text-xs text-teal-600 font-semibold">Active</span>':`<button onclick="switchUser('${u.id}')" class="text-xs text-gray-400 hover:text-teal-600">Switch to</button>`}
+              <button onclick="delUser('${u.id}')" class="p-1 text-gray-300 hover:text-red-500">🗑</button>
+            </div>`).join('')
+          }
+        </div>
+        <button onclick="showAddUserModal()" class="btn-secondary w-full py-2.5 rounded-lg text-sm font-medium">+ Add team member</button>
+      </div>
+      <div class="card p-5">
+        <div class="font-semibold text-gray-800 mb-3">Keyboard Shortcuts</div>
+        <div class="grid grid-cols-2 gap-2 text-sm text-gray-600">
+          ${[['D','Dashboard'],['T','Timer'],['L','Time Log'],['E','Expenses'],['C','Clients'],['B','Backlog'],['R','Reports'],['Esc','Close modal']].map(([k,v])=>
+            `<div class="flex items-center gap-2"><kbd class="bg-gray-100 border border-gray-200 rounded px-2 py-0.5 text-xs font-mono">${k}</kbd><span>${v}</span></div>`).join('')}
+        </div>
+      </div>
+      <div class="card p-5">
+        <div class="font-semibold text-gray-800 mb-3">Data</div>
+        <div class="flex flex-wrap gap-2">
+          <button onclick="exportData()" class="btn-secondary px-4 py-2 rounded-lg text-sm">⬇ Export backup</button>
+          <button onclick="importData()" class="btn-secondary px-4 py-2 rounded-lg text-sm">⬆ Import backup</button>
+          <button onclick="clearData()" class="btn-danger px-4 py-2 rounded-lg text-sm">🗑 Clear all</button>
+        </div>
+        <p class="text-xs text-gray-400 mt-3">Data is stored in your shared Supabase workspace and synced across your team. Export for an offline backup.</p>
+      </div>
+    </div>`;
+}
+
+function switchUser(id){State.setActiveUser(id);refreshUserSelect();render();toast('Switched user ✓');}
+function delUser(id){if(!confirm('Delete this user?'))return;DB.saveU(DB.users().filter(u=>u.id!==id));refreshUserSelect();render();}
+function exportData(){
+  const data={users:DB.users(),clients:DB.clients(true),projects:load(KEYS.projects),timeEntries:DB.time(),expenses:DB.exps(),backlog:DB.backlog(),exportedAt:new Date().toISOString()};
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+  a.download=`tempo-backup-${todayStr()}.json`; a.click(); toast('Backup exported ✓');
+}
+function importData(){
+  const input=document.createElement('input'); input.type='file'; input.accept='.json';
+  input.onchange=e=>{
+    const file=e.target.files[0]; if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const d=JSON.parse(ev.target.result);
+        if(!confirm('This will replace all data. Continue?'))return;
+        if(d.users)     DB.saveU(d.users);
+        if(d.clients)   DB.saveClients(d.clients);
+        if(d.projects)  save(KEYS.projects,d.projects);
+        if(d.timeEntries) DB.saveTime(d.timeEntries);
+        if(d.expenses)  DB.saveExp(d.expenses);
+        if(d.backlog)   DB.saveBack(d.backlog);
+        refreshUserSelect(); render(); toast('Backup imported ✓');
+      }catch{toast('Invalid file','err');}
+    }; reader.readAsText(file);
+  }; input.click();
+}
+function clearData(){
+  if(!confirm('Delete ALL data? This cannot be undone.'))return;
+  Object.values(KEYS).forEach(k=>localStorage.removeItem(k));
+  refreshUserSelect(); render(); toast('Data cleared');
+}
+
+// ═══════════════════════════════════════════════
+//  MODAL: TIME ENTRY
+// ═══════════════════════════════════════════════
+
+function showTimeModal(id=null) {
+  const e=id?DB.time().find(x=>x.id===id):null;
+  const user=State.activeUser;
+  showModal(`
+    <h3 class="font-semibold text-gray-800 mb-4">${e?'Edit Time Entry':'Log Time'}</h3>
+    <div class="space-y-3">
+      <div class="grid grid-cols-2 gap-3">
+        <div><label>Date</label><input type="date" id="te_date" value="${e?.date||todayStr()}"></div>
+        <div><label>Hours</label><input type="number" id="te_hours" value="${e?.hours||''}" step="0.25" min="0.25" max="24" placeholder="1.5"></div>
+      </div>
+      <div><label>Client</label><select id="te_client" onchange="reloadProjSel('te')">${clientOpts(e?.clientId||'')}</select></div>
+      <div><label>Project <span class="text-gray-400 font-normal">(optional)</span></label><select id="te_proj">${projOpts(e?.clientId||'',e?.projectId||'')}</select></div>
+      <div><label>Team member</label><select id="te_user">${userOpts(e?.userId||user?.id||'')}</select></div>
+      <div><label>Notes</label><input type="text" id="te_notes" value="${esc(e?.notes||'')}" placeholder="What did you work on?"></div>
+      <div class="flex items-center gap-2 pt-1"><input type="checkbox" id="te_bill" ${e?.billable!==false?'checked':''}><label for="te_bill" class="mb-0 cursor-pointer" style="color:#374151">Billable</label></div>
+      <div class="flex justify-end gap-2 pt-2 border-t border-gray-100">
+        <button onclick="closeModal()" class="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+        <button onclick="saveTimeEntry('${id||''}')" class="btn-primary px-4 py-2 rounded-lg text-sm">${e?'Save changes':'Log time'}</button>
+      </div>
+    </div>`);
+}
+function editTimeEntry(id){showTimeModal(id);}
+function reloadProjSel(prefix) {
+  const clientId=document.getElementById(`${prefix}_client`)?.value||'';
+  const sel=document.getElementById(`${prefix}_proj`);
+  if(sel) sel.innerHTML=projOpts(clientId,'');
+}
+function blClientInput(q) {
+  const dd=document.getElementById('bl_client_dd');
+  if(!dd)return;
+  document.getElementById('bl_client').value='';
+  const matches=DB.clients().filter(c=>!q||c.name.toLowerCase().includes(q.toLowerCase()));
+  if(!matches.length){dd.style.display='none';return;}
+  window._blClientMatches=matches;
+  dd.innerHTML=matches.map((c,i)=>`<div onmousedown="blSelectClient(${i})" style="padding:8px 12px;cursor:pointer;font-size:0.875rem;border-bottom:1px solid #F3F4F6" onmouseenter="this.style.background='#F0FDFA'" onmouseleave="this.style.background=''">${esc(c.name)}</div>`).join('');
+  dd.style.display='block';
+}
+function blSelectClient(idx) {
+  const c=window._blClientMatches?.[idx];if(!c)return;
+  document.getElementById('bl_client_txt').value=c.name;
+  document.getElementById('bl_client').value=c.id;
+  document.getElementById('bl_client_dd').style.display='none';
+  document.getElementById('bl_proj_txt').value='';
+  document.getElementById('bl_proj').value='';
+}
+function blProjInput(q) {
+  const dd=document.getElementById('bl_proj_dd');
+  if(!dd)return;
+  document.getElementById('bl_proj').value='';
+  const clientId=document.getElementById('bl_client').value||undefined;
+  const matches=DB.projs(clientId).filter(p=>!q||p.name.toLowerCase().includes(q.toLowerCase()));
+  if(!matches.length){dd.style.display='none';return;}
+  window._blProjMatches=matches;
+  dd.innerHTML=matches.map((p,i)=>`<div onmousedown="blSelectProj(${i})" style="padding:8px 12px;cursor:pointer;font-size:0.875rem;border-bottom:1px solid #F3F4F6" onmouseenter="this.style.background='#F0FDFA'" onmouseleave="this.style.background=''">${esc(p.name)}</div>`).join('');
+  dd.style.display='block';
+}
+function blSelectProj(idx) {
+  const p=window._blProjMatches?.[idx];if(!p)return;
+  document.getElementById('bl_proj_txt').value=p.name;
+  document.getElementById('bl_proj').value=p.id;
+  document.getElementById('bl_proj_dd').style.display='none';
+}
+function saveTimeEntry(id) {
+  const date=document.getElementById('te_date')?.value;
+  const hours=parseFloat(document.getElementById('te_hours')?.value);
+  const clientId=document.getElementById('te_client')?.value;
+  const projId=document.getElementById('te_proj')?.value||null;
+  const userId=document.getElementById('te_user')?.value;
+  const notes=document.getElementById('te_notes')?.value||'';
+  const billable=document.getElementById('te_bill')?.checked??true;
+  if(!date){toast('Please select a date','err');return;}
+  if(!hours||hours<=0){toast('Please enter valid hours','err');return;}
+  if(!clientId){toast('Please select a client','err');return;}
+  const all=DB.time();
+  if(id){const i=all.findIndex(e=>e.id===id);if(i>=0)all[i]={...all[i],date,hours,clientId,projectId:projId,userId,notes,billable};DB.saveTime(all);}
+  else DB.addTime({userId,clientId,projectId:projId,date,hours,notes,billable,createdAt:new Date().toISOString()});
+  closeModal();render();toast(id?'Entry updated ✓':'Time logged ✓');
+}
+function delTimeEntry(id){if(!confirm('Delete this entry?'))return;DB.saveTime(DB.time().filter(e=>e.id!==id));render();toast('Entry deleted');}
+
+// ═══════════════════════════════════════════════
+//  MODAL: EXPENSE
+// ═══════════════════════════════════════════════
+
+function showExpenseModal(id=null) {
+  const e=id?DB.exps().find(x=>x.id===id):null;
+  const user=State.activeUser;
+  const catOpts=EXP_CATS.map(c=>`<option${(e?.category||'Other')===c?' selected':''}>${c}</option>`).join('');
+  showModal(`
+    <h3 class="font-semibold text-gray-800 mb-4">${e?'Edit Expense':'Log Expense'}</h3>
+    <div class="space-y-3">
+      <div class="grid grid-cols-2 gap-3">
+        <div><label>Date</label><input type="date" id="ex_date" value="${e?.date||todayStr()}"></div>
+        <div><label>Amount ($)</label><input type="number" id="ex_amt" value="${e?.amount||''}" step="0.01" min="0" placeholder="0.00"></div>
+      </div>
+      <div><label>Client</label><select id="ex_client" onchange="reloadProjSel('ex')">${clientOpts(e?.clientId||'')}</select></div>
+      <div><label>Project <span class="text-gray-400 font-normal">(optional)</span></label><select id="ex_proj">${projOpts(e?.clientId||'',e?.projectId||'')}</select></div>
+      <div><label>Category</label><select id="ex_cat">${catOpts}</select></div>
+      <div><label>Team member</label><select id="ex_user">${userOpts(e?.userId||user?.id||'')}</select></div>
+      <div><label>Notes / receipt ref</label><input type="text" id="ex_notes" value="${esc(e?.notes||'')}" placeholder="Description or receipt reference"></div>
+      <div class="flex items-center gap-2 pt-1"><input type="checkbox" id="ex_bill" ${e?.billable!==false?'checked':''}><label for="ex_bill" class="mb-0 cursor-pointer" style="color:#374151">Billable</label></div>
+      <div class="flex justify-end gap-2 pt-2 border-t border-gray-100">
+        <button onclick="closeModal()" class="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+        <button onclick="saveExpense('${id||''}')" class="btn-primary px-4 py-2 rounded-lg text-sm">${e?'Save changes':'Log expense'}</button>
+      </div>
+    </div>`);
+}
+function editExpense(id){showExpenseModal(id);}
+function saveExpense(id){
+  const date=document.getElementById('ex_date')?.value;
+  const amt=parseFloat(document.getElementById('ex_amt')?.value);
+  const clientId=document.getElementById('ex_client')?.value;
+  const projId=document.getElementById('ex_proj')?.value||null;
+  const cat=document.getElementById('ex_cat')?.value||'Other';
+  const userId=document.getElementById('ex_user')?.value;
+  const notes=document.getElementById('ex_notes')?.value||'';
+  const billable=document.getElementById('ex_bill')?.checked??true;
+  if(!date){toast('Please select a date','err');return;}
+  if(!amt||amt<=0){toast('Please enter a valid amount','err');return;}
+  if(!clientId){toast('Please select a client','err');return;}
+  const all=DB.exps();
+  if(id){const i=all.findIndex(e=>e.id===id);if(i>=0)all[i]={...all[i],date,amount:amt,clientId,projectId:projId,category:cat,userId,notes,billable};DB.saveExp(all);}
+  else DB.addExp({userId,clientId,projectId:projId,date,amount:amt,category:cat,notes,billable,createdAt:new Date().toISOString()});
+  closeModal();render();toast(id?'Expense updated ✓':'Expense logged ✓');
+}
+function delExpense(id){if(!confirm('Delete this expense?'))return;DB.saveExp(DB.exps().filter(e=>e.id!==id));render();toast('Expense deleted');}
+
+// ═══════════════════════════════════════════════
+//  MODAL: CLIENT (was Project)
+// ═══════════════════════════════════════════════
+
+const CLIENT_COLORS=['#0D9488','#6366F1','#D97706','#DC2626','#7C3AED','#0891B2','#65A30D','#DB2777','#EA580C','#0369A1'];
+
+function showClientModal(id=null) {
+  const c=id?DB.client(id):null;
+  const col=c?.color||CLIENT_COLORS[0];
+  showModal(`
+    <h3 class="font-semibold text-gray-800 mb-4">${c?'Edit Client':'New Client'}</h3>
+    <input type="hidden" id="cl_col" value="${col}">
+    <div class="space-y-3">
+      <div><label>Client name</label><input type="text" id="cl_name" value="${esc(c?.name||'')}" placeholder="e.g. Sesame, Frore, R&D, Aurio"></div>
+      <div>
+        <label>Type</label>
+        <select id="cl_type">
+          <option value="client"  ${(!c||c.type==='client') ?'selected':''}>Client (external / billable)</option>
+          <option value="rd"      ${c?.type==='rd'          ?'selected':''}>R&D (internal research / dev)</option>
+          <option value="internal"${c?.type==='internal'    ?'selected':''}>Internal / admin</option>
+        </select>
+      </div>
+      <div><label>Hourly rate <span class="text-gray-400 font-normal">(optional — for billed value in reports)</span></label>
+        <input type="number" id="cl_rate" value="${c?.rate||''}" min="0" step="0.01" placeholder="Leave blank if not applicable">
+      </div>
+      <div>
+        <label>Color</label>
+        <div class="flex gap-2 flex-wrap mt-1">
+          ${CLIENT_COLORS.map((clr,i)=>`<div id="clrcl_${i}" onclick="pickClientColor('${clr}')" class="color-dot ${clr===col?'selected':''}" style="background:${clr};color:${clr}"></div>`).join('')}
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2 border-t border-gray-100">
+        <button onclick="closeModal()" class="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+        <button onclick="saveClient('${id||''}')" class="btn-primary px-4 py-2 rounded-lg text-sm">${c?'Save changes':'Create client'}</button>
+      </div>
+    </div>`);
+}
+function pickClientColor(clr) {
+  document.getElementById('cl_col').value=clr;
+  CLIENT_COLORS.forEach((c,i)=>{ const el=document.getElementById(`clrcl_${i}`); if(el){el.classList.toggle('selected',c===clr);el.style.color=c;} });
+}
+function editClient(id){showClientModal(id);}
+function saveClient(id){
+  const name=document.getElementById('cl_name')?.value?.trim();
+  if(!name){toast('Please enter a name','err');return;}
+  const type=document.getElementById('cl_type')?.value||'client';
+  const rate=parseFloat(document.getElementById('cl_rate')?.value)||null;
+  const color=document.getElementById('cl_col')?.value||CLIENT_COLORS[0];
+  const all=DB.clients(true);
+  if(id){const i=all.findIndex(c=>c.id===id);if(i>=0)all[i]={...all[i],name,type,rate,color};DB.saveClients(all);}
+  else{all.push({id:uid(),name,type,rate,color,status:'active',createdAt:new Date().toISOString()});DB.saveClients(all);}
+  closeModal();render();toast(id?'Client updated ✓':'Client created ✓');
+}
+function archiveClient(id){
+  const all=DB.clients(true),i=all.findIndex(c=>c.id===id);
+  if(i<0)return; all[i].status=all[i].status==='archived'?'active':'archived';
+  DB.saveClients(all);render();toast(all[i].status==='archived'?'Client archived':'Client unarchived');
+}
+function delClient(id){
+  const te=DB.time().filter(e=>e.clientId===id).length, ex=DB.exps().filter(e=>e.clientId===id).length;
+  const msg=(te+ex)>0?`This client has ${te} time entries and ${ex} expenses. Delete anyway?`:'Delete this client?';
+  if(!confirm(msg))return;
+  DB.saveClients(DB.clients(true).filter(c=>c.id!==id));
+  save(KEYS.projects,load(KEYS.projects).filter(p=>p.clientId!==id));
+  render();toast('Client deleted');
+}
+
+// ═══════════════════════════════════════════════
+//  MODAL: ADD PROJECT (sub-project under client)
+// ═══════════════════════════════════════════════
+
+function showAddProjectModal(clientId, dashKey=null) {
+  const client=DB.client(clientId);
+  showModal(`
+    <h3 class="font-semibold text-gray-800 mb-1">Add Project</h3>
+    <p class="text-sm text-gray-500 mb-4">Under <strong>${esc(client?.name||'this client')}</strong></p>
+    <div class="space-y-3">
+      <div><label>Project name</label><input type="text" id="np_name" placeholder="e.g. Lab Testing, Website Redesign, Phase 2"></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label>Rate ($/hr) <span class="text-gray-400 font-normal">(optional)</span></label>
+          <input type="number" id="np_rate" step="0.01" min="0" placeholder="Inherits from client">
+        </div>
+        <div><label>Rate label <span class="text-gray-400 font-normal">(optional)</span></label>
+          <input type="text" id="np_ratelabel" placeholder="e.g. Lab Rate, Consulting">
+        </div>
+      </div>
+      <p class="text-xs text-gray-400 -mt-1">Set a rate here to override the client default for this project only.</p>
+      <div class="flex justify-end gap-2 pt-2 border-t border-gray-100">
+        <button onclick="closeModal()" class="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+        <button onclick="saveNewProject('${clientId}','${dashKey||''}')" class="btn-primary px-4 py-2 rounded-lg text-sm">Add project</button>
+      </div>
+    </div>`);
+}
+function saveNewProject(clientId, dashKey) {
+  const name=document.getElementById('np_name')?.value?.trim();
+  if(!name){toast('Please enter a name','err');return;}
+  const rate=parseFloat(document.getElementById('np_rate')?.value)||null;
+  const rateLabel=document.getElementById('np_ratelabel')?.value?.trim()||null;
+  const p=DB.addProj({clientId,name,rate,rateLabel,status:'active',createdAt:new Date().toISOString()});
+  closeModal();toast(`Project "${name}" added ✓`);
+  if(dashKey){
+    // Update only the project dropdown — skip full render so other form fields (hours, task, note) are preserved
+    const sel=document.getElementById(`${sanitizeKey(clientId)}_proj`);
+    if(sel){sel.innerHTML=projOpts(clientId,p.id);sel.value=p.id;}
+  } else {
+    render();
+  }
+}
+function delSubProject(id){
+  if(!confirm('Delete this project? Logged entries will remain but unlinked.'))return;
+  save(KEYS.projects,load(KEYS.projects).filter(p=>p.id!==id));
+  render();toast('Project deleted');
+}
+function showEditProjectModal(id) {
+  const p=DB.proj(id);
+  if(!p)return;
+  const client=DB.client(p.clientId);
+  showModal(`
+    <h3 class="font-semibold text-gray-800 mb-1">Edit Project</h3>
+    <p class="text-sm text-gray-500 mb-4">Under <strong>${esc(client?.name||'this client')}</strong></p>
+    <div class="space-y-3">
+      <div><label>Project name</label><input type="text" id="ep_name" value="${esc(p.name)}" placeholder="e.g. Lab Testing, Website Redesign"></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label>Rate ($/hr) <span class="text-gray-400 font-normal">(optional)</span></label>
+          <input type="number" id="ep_rate" value="${p.rate||''}" step="0.01" min="0" placeholder="Inherits from client">
+        </div>
+        <div><label>Rate label <span class="text-gray-400 font-normal">(optional)</span></label>
+          <input type="text" id="ep_ratelabel" value="${esc(p.rateLabel||'')}" placeholder="e.g. Lab Rate, Consulting">
+        </div>
+      </div>
+      <p class="text-xs text-gray-400 -mt-1">Override the client default rate for this project only.</p>
+      <div class="flex justify-end gap-2 pt-2 border-t border-gray-100">
+        <button onclick="closeModal()" class="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+        <button onclick="saveEditProject('${id}')" class="btn-primary px-4 py-2 rounded-lg text-sm">Save changes</button>
+      </div>
+    </div>`);
+}
+function saveEditProject(id) {
+  const name=document.getElementById('ep_name')?.value?.trim();
+  if(!name){toast('Please enter a name','err');return;}
+  const rate=parseFloat(document.getElementById('ep_rate')?.value)||null;
+  const rateLabel=document.getElementById('ep_ratelabel')?.value?.trim()||null;
+  const all=load(KEYS.projects);
+  const i=all.findIndex(p=>p.id===id);
+  if(i>=0) all[i]={...all[i],name,rate,rateLabel};
+  save(KEYS.projects,all);
+  closeModal();render();toast('Project updated ✓');
+}
+
+// ═══════════════════════════════════════════════
+//  MODAL: BACKLOG ITEM
+// ═══════════════════════════════════════════════
+
+function showBacklogModal(id=null) {
+  const item=id?DB.backlog().find(x=>x.id===id):null;
+  const selPr=(v)=>(item?.priority||'medium')===v?'selected':'';
+  const selRf=(v)=>(item?.recurFrequency||'weekly')===v?'selected':'';
+  const inThisWeek = item?.weekOf === currentWeek();
+  showModal(`
+    <h3 class="font-semibold text-gray-800 mb-4">${item?'Edit Item':'New Backlog Item'}</h3>
+    <div class="space-y-3">
+      <div><label>Title</label><input type="text" id="bl_title" value="${esc(item?.title||'')}" placeholder="What needs to be done?"></div>
+      <div><label>Description <span class="text-gray-400 font-normal">(optional)</span></label><textarea id="bl_desc" rows="2" placeholder="More detail…">${esc(item?.description||'')}</textarea></div>
+      <div style="position:relative">
+        <label>Client <span class="text-gray-400 font-normal">(optional)</span></label>
+        <input type="text" id="bl_client_txt" placeholder="Search or type new client name…" oninput="blClientInput(this.value)" onfocus="blClientInput(this.value)" onblur="setTimeout(()=>{const d=document.getElementById('bl_client_dd');if(d)d.style.display='none';},160)" autocomplete="off" value="${esc(DB.client(item?.clientId||null)?.name||'')}">
+        <input type="hidden" id="bl_client" value="${item?.clientId||''}">
+        <div id="bl_client_dd" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:1px solid #D1D5DB;border-radius:0.4rem;z-index:50;max-height:160px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px"></div>
+      </div>
+      <div style="position:relative">
+        <label>Project / Category <span class="text-gray-400 font-normal">(optional)</span></label>
+        <input type="text" id="bl_proj_txt" placeholder="Search or type new project / category…" oninput="blProjInput(this.value)" onfocus="blProjInput(this.value)" onblur="setTimeout(()=>{const d=document.getElementById('bl_proj_dd');if(d)d.style.display='none';},160)" autocomplete="off" value="${esc(DB.proj(item?.projectId||null)?.name||'')}">
+        <input type="hidden" id="bl_proj" value="${item?.projectId||''}">
+        <div id="bl_proj_dd" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:1px solid #D1D5DB;border-radius:0.4rem;z-index:50;max-height:160px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px"></div>
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div><label>Priority</label><select id="bl_priority"><option value="high" ${selPr('high')}>🔴 High</option><option value="medium" ${selPr('medium')}>🟡 Medium</option><option value="low" ${selPr('low')}>🔵 Low</option></select></div>
+        <div><label>Effort</label><select id="bl_effort">
+          <option value="">— none —</option>
+          <option value="1" ${item?.effort===1?'selected':''}>1 · Tiny</option>
+          <option value="2" ${item?.effort===2?'selected':''}>2 · Small</option>
+          <option value="3" ${item?.effort===3?'selected':''}>3 · Medium</option>
+          <option value="5" ${item?.effort===5?'selected':''}>5 · Large</option>
+          <option value="8" ${item?.effort===8?'selected':''}>8 · XL</option>
+          <option value="13" ${item?.effort===13?'selected':''}>13 · Epic</option>
+        </select></div>
+        <div><label>Due date <span class="text-gray-400 font-normal">(opt)</span></label><input type="date" id="bl_due" value="${esc(item?.dueDate||'')}"></div>
+      </div>
+      <div class="flex items-center gap-6">
+        <label class="flex items-center gap-2 cursor-pointer" style="display:flex;margin:0">
+          <input type="checkbox" id="bl_urgent" ${item?.urgent?'checked':''} style="width:16px;height:16px">
+          <span class="text-sm text-gray-700">⚡ Urgent</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer" style="display:flex;margin:0">
+          <input type="checkbox" id="bl_recurring" ${item?.recurring?'checked':''} style="width:16px;height:16px" onchange="document.getElementById('bl_recurFields').style.display=this.checked?'block':'none'">
+          <span class="text-sm text-gray-700">↺ Recurring</span>
+        </label>
+      </div>
+      <div id="bl_recurFields" style="display:${item?.recurring?'block':'none'}" class="bg-gray-50 rounded-lg p-3">
+        <label>Repeats</label>
+        <select id="bl_recurFreq"><option value="weekly" ${selRf('weekly')}>Weekly</option><option value="biweekly" ${selRf('biweekly')}>Every 2 weeks</option><option value="monthly" ${selRf('monthly')}>Monthly</option></select>
+        <p class="text-xs text-gray-400 mt-1.5">When marked done, a fresh copy returns to the backlog.</p>
+      </div>
+      ${item?`<div class="text-xs text-gray-400 pt-1">Currently in: ${inThisWeek?'📌 This Week':'📋 Backlog'}</div>`:''}
+      <div class="flex justify-between items-center pt-2 border-t border-gray-100">
+        ${item?`<button onclick="delBacklogItem('${item.id}')" class="text-red-500 text-sm hover:underline">Delete</button>`:'<span></span>'}
+        <div class="flex gap-2">
+          <button onclick="closeModal()" class="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+          <button onclick="saveBacklogItem('${id||''}')" class="btn-primary px-4 py-2 rounded-lg text-sm">${item?'Save changes':'Add to backlog'}</button>
+        </div>
+      </div>
+    </div>`);
+}
+function editBacklogItem(id){showBacklogModal(id);}
+function saveBacklogItem(id){
+  const title=document.getElementById('bl_title')?.value?.trim();
+  if(!title){toast('Please enter a title','err');return;}
+  const desc=document.getElementById('bl_desc')?.value?.trim()||'';
+  const priority=document.getElementById('bl_priority')?.value||'medium';
+  const dueDate=document.getElementById('bl_due')?.value||null;
+  const effortRaw=document.getElementById('bl_effort')?.value;
+  const effort=effortRaw?parseInt(effortRaw):null;
+  const urgent=document.getElementById('bl_urgent')?.checked||false;
+  const recurring=document.getElementById('bl_recurring')?.checked||false;
+  const recurFrequency=recurring?(document.getElementById('bl_recurFreq')?.value||'weekly'):null;
+  // Resolve client: existing ID from hidden field, or create new from typed text
+  let clientId=document.getElementById('bl_client')?.value||null;
+  if(!clientId){
+    const newName=document.getElementById('bl_client_txt')?.value?.trim();
+    if(newName){
+      const newC={id:uid(),name:newName,type:'client',rate:null,color:CLIENT_COLORS[0],status:'active',createdAt:new Date().toISOString()};
+      const allC=DB.clients(true);allC.push(newC);DB.saveClients(allC);clientId=newC.id;
+    }
+  }
+  // Resolve project / category: existing ID or create new from typed text
+  let projId=document.getElementById('bl_proj')?.value||null;
+  if(!projId){
+    const newName=document.getElementById('bl_proj_txt')?.value?.trim();
+    if(newName){
+      const newP={id:uid(),clientId:clientId||null,name:newName,rate:null,status:'active',createdAt:new Date().toISOString()};
+      const allP=load(KEYS.projects);allP.push(newP);save(KEYS.projects,allP);projId=newP.id;
+    }
+  }
+  const all=DB.backlog();
+  if(!id){
+    const tl=title.toLowerCase();
+    const dupe=all.find(b=>!b.archivedAt&&b.title.toLowerCase()===tl);
+    if(dupe) toast(`Heads up: similar item exists — "${dupe.title}"`,'err');
+  }
+  const now=new Date().toISOString();
+  if(id){
+    const i=all.findIndex(x=>x.id===id);
+    if(i>=0) all[i]={...all[i],title,description:desc,priority,effort,dueDate,urgent,recurring,recurFrequency,clientId,projectId:projId,lastTouchedAt:now};
+  } else {
+    all.push({id:uid(),title,description:desc,priority,effort,dueDate,urgent,recurring,recurFrequency,clientId,projectId:projId,weekOf:null,archivedAt:null,createdAt:now,lastTouchedAt:now});
+  }
+  DB.saveBack(all);
+  closeModal();render();toast(id?'Item updated ✓':'Added to backlog ✓');
+}
+function delBacklogItem(id){if(!confirm('Delete this item?'))return;DB.saveBack(DB.backlog().filter(x=>x.id!==id));render();toast('Item deleted');}
+function delBacklogItemSilent(id){DB.saveBack(DB.backlog().filter(x=>x.id!==id));render();}
+function promoteToWeek(id){
+  const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
+  if(i<0)return;
+  all[i]={...all[i],weekOf:currentWeek(),lastTouchedAt:new Date().toISOString()};
+  DB.saveBack(all);render();toast('Moved to This Week ✓');
+}
+function pullToBacklog(id){
+  const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
+  if(i<0)return;
+  all[i]={...all[i],weekOf:null,lastTouchedAt:new Date().toISOString()};
+  DB.saveBack(all);render();
+}
+function markItemDone(id){
+  const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
+  if(i<0)return;
+  const now=new Date().toISOString();
+  const item=all[i];
+  all[i]={...item,archivedAt:now,completedAt:now};
+  if(item.recurring&&item.recurFrequency){
+    // Respawn a fresh copy for the next cycle
+    const nextDue = item.dueDate ? nextRecurDate(item.dueDate,item.recurFrequency) : null;
+    all.push({...item,id:uid(),weekOf:null,archivedAt:null,completedAt:null,dueDate:nextDue,createdAt:now,lastTouchedAt:now});
+  }
+  DB.saveBack(all);render();toast(item.recurring?'Done ✓ — next occurrence added to backlog':'Done ✓');
+}
+function archiveItem(id){
+  const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
+  if(i<0)return;
+  all[i]={...all[i],archivedAt:new Date().toISOString()};
+  DB.saveBack(all);render();
+}
+function keepItem(id){
+  const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
+  if(i<0)return;
+  all[i]={...all[i],lastTouchedAt:new Date().toISOString()};
+  DB.saveBack(all);render();toast('Kept ✓');
+}
+function showArchive(){
+  const all=DB.backlog();
+  const archived=all.filter(i=>i.archivedAt).sort((a,b)=>b.archivedAt.localeCompare(a.archivedAt));
+  const clients=DB.clients(true),clientMap={};
+  clients.forEach(c=>clientMap[c.id]=c);
+  const rows=archived.map(item=>{
+    const client=clientMap[item.clientId];
+    return `<div class="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
+      <div class="flex-1 min-w-0">
+        <div class="text-sm text-gray-700 font-medium">${esc(item.title)}</div>
+        ${client?`<div class="text-xs" style="color:${client.color||'#888'}">● ${esc(client.name)}</div>`:''}
+      </div>
+      <div class="text-xs text-gray-400 flex-shrink-0">${item.completedAt?'✓ done':'archived'} ${new Date(item.archivedAt).toLocaleDateString()}</div>
+      <button onclick="restoreItem('${item.id}')" class="text-xs text-teal-600 hover:text-teal-800 flex-shrink-0 hover:underline">Restore</button>
+    </div>`;
+  }).join('');
+  showModal(`<div class="flex items-center justify-between mb-4"><h3 class="text-base font-bold text-gray-800">Archive</h3><button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button></div>
+    ${archived.length===0
+      ?'<div class="text-center text-gray-400 py-8 text-sm">Nothing archived yet</div>'
+      :`<div class="text-xs text-gray-400 mb-3">${archived.length} item${archived.length===1?'':'s'}</div>${rows}`
+    }`);
+}
+function restoreItem(id){
+  const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
+  if(i<0)return;
+  all[i]={...all[i],archivedAt:null,completedAt:null,weekOf:null};
+  DB.saveBack(all);closeModal();render();toast('Item restored ✓');
+}
+
+// ═══════════════════════════════════════════════
+//  MODAL: ADD USER
+// ═══════════════════════════════════════════════
+
+function showAddUserModal() {
+  showModal(`<h3 class="font-semibold text-gray-800 mb-4">Add Team Member</h3>
+    <div class="space-y-3">
+      <div><label>Name</label><input type="text" id="nu_name" placeholder="e.g. Tim Sandrik"></div>
+      <div class="flex justify-end gap-2 pt-2 border-t border-gray-100">
+        <button onclick="closeModal()" class="btn-secondary px-4 py-2 rounded-lg text-sm">Cancel</button>
+        <button onclick="addUser()" class="btn-primary px-4 py-2 rounded-lg text-sm">Add</button>
+      </div>
+    </div>`);
+}
+function addUser(){
+  const name=document.getElementById('nu_name')?.value?.trim();
+  if(!name){toast('Please enter a name','err');return;}
+  const colors=['#0D9488','#6366F1','#D97706','#DC2626','#7C3AED','#0891B2'];
+  const users=DB.users(), color=colors[users.length%colors.length];
+  const nu={id:uid(),name,color}; users.push(nu); DB.saveU(users);
+  if(users.length===1)State.setActiveUser(nu.id);
+  closeModal();refreshUserSelect();render();toast(`Added ${name} ✓`);
+}
+
+// ═══════════════════════════════════════════════
+//  ONBOARDING
+// ═══════════════════════════════════════════════
+
+function showOnboarding() {
+  showModal(`
+    <div class="text-center py-2">
+      <div class="w-14 h-14 bg-teal-500 rounded-2xl flex items-center justify-center text-white text-3xl font-black mx-auto mb-4">T</div>
+      <h2 class="text-xl font-bold text-gray-800 mb-1">Welcome to Tempo</h2>
+      <p class="text-sm text-gray-500 mb-6">Track time and expenses across clients, R&amp;D, and internal work. Each client is a row — log against them directly from the dashboard.</p>
+      <div class="text-left space-y-3 mb-6">
+        <div><label>Your name</label><input type="text" id="ob_name" placeholder="e.g. Tim Sandrik"></div>
+      </div>
+      <button onclick="finishOnboarding()" class="btn-primary w-full py-3 rounded-xl text-base font-semibold">Get started →</button>
+    </div>`);
+  setTimeout(()=>document.getElementById('ob_name')?.focus(),100);
+}
+function finishOnboarding(){
+  const name=document.getElementById('ob_name')?.value?.trim();
+  if(!name){toast('Please enter your name','err');return;}
+  const user={id:uid(),name,color:'#0D9488'}; DB.saveU([user]); State.setActiveUser(user.id);
+  // Seed starter clients
+  const cc=CLIENT_COLORS;
+  DB.saveClients([
+    {id:uid(),name:'Client Work',    type:'client',  rate:null,color:cc[1],status:'active',createdAt:new Date().toISOString()},
+    {id:uid(),name:'R&D',            type:'rd',      rate:null,color:cc[0],status:'active',createdAt:new Date().toISOString()},
+    {id:uid(),name:'Internal / Admin',type:'internal',rate:null,color:cc[8],status:'active',createdAt:new Date().toISOString()},
+  ]);
+  save(KEYS.projects,[]);
+  closeModal();refreshUserSelect();render();toast(`Welcome, ${name}! 🎉`);
+}
+
+// ═══════════════════════════════════════════════
+//  FILTER + RENDER HELPERS
+// ═══════════════════════════════════════════════
+
+function setFilter(view,key,val){ State.filters[view][key]=val; render(); }
+
+// ═══════════════════════════════════════════════
+//  MAIN RENDER
+// ═══════════════════════════════════════════════
+
+function render() {
+  const views={dashboard:renderDashboard,timer:renderTimer,log:renderLog,expenses:renderExpenses,clients:renderClients,backlog:renderBacklog,reports:renderReports,settings:renderSettings};
+  const fn=views[State.view]; if(fn) document.getElementById('appContent').innerHTML=fn();
+  renderNav();
+  // Populate account info in settings asynchronously
+  if(State.view==='settings'){
+    _sb.auth.getUser().then(({data:{user}})=>{
+      const el=document.getElementById('accountInfo');
+      if(el&&user) el.textContent='Signed in as '+user.email;
+    }).catch(()=>{});
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  USER SELECT
+// ═══════════════════════════════════════════════
+
+function refreshUserSelect(){
+  const sel=document.getElementById('activeUserSelect'), users=DB.users(), settings=DB.settings();
+  if(!sel)return;
+  sel.innerHTML=users.length===0?'<option value="">No users</option>':users.map(u=>`<option value="${u.id}"${u.id===settings.activeUserId?' selected':''}>${esc(u.name)}</option>`).join('');
+  sel.onchange=()=>State.setActiveUser(sel.value);
+}
+
+// ═══════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════
+
+async function init(){
+  // Check if already logged in
+  const { data: { session } } = await _sb.auth.getSession();
+  if(!session){ renderLogin(); return; }
+
+  // Pull all shared data from Supabase into cache
+  await syncAll();
+
+  // One-time migration: if Supabase is empty, import existing localStorage data
+  await maybeImportLocalStorage();
+
+  // Data shape upgrades
+  migrate();
+  migrateBacklogModel();
+
+  // Link this auth user to a team member record
+  await ensureTeamMember(session.user);
+
+  refreshUserSelect();
+  navigate('dashboard');
+  TimerEngine.init();
+
+  document.addEventListener('keydown',e=>{
+    if(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))return;
+    const map={d:'dashboard',t:'timer',l:'log',e:'expenses',c:'clients',b:'backlog',r:'reports',s:'settings'};
+    if(map[e.key]){navigate(map[e.key]);return;}
+    if(e.key==='Escape')closeModal();
+  });
+}
+
+init();
+</script>
+</body>
+</html>
