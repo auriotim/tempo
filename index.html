@@ -402,6 +402,20 @@ function migrateBacklogModel() {
   if(changed) save(KEYS.backlog, migrated);
 }
 
+function migrateUserIds() {
+  // Backfill any time/expense entries with empty userId → current user
+  const myId = activeViewer();
+  if (!myId) return;
+  const times = DB.time();
+  let tc = false;
+  const ut = times.map(e => { if(e.userId) return e; tc=true; return {...e, userId: myId}; });
+  if(tc) save(KEYS.timeEntries, ut);
+  const exps = DB.exps();
+  let ec = false;
+  const ue = exps.map(e => { if(e.userId) return e; ec=true; return {...e, userId: myId}; });
+  if(ec) save(KEYS.expenses, ue);
+}
+
 function migrateVisibility() {
   // Add visibility + ownerId to existing data that lacks it
   const myId = activeViewer();
@@ -715,9 +729,9 @@ function renderDashboard() {
     return true;
   });
 
-  // Personal view: only my entries; Team view: all visible entries
-  const allTime = isTeam ? visTime : visTime.filter(e => e.userId === myId);
-  const allExp  = isTeam ? visExp  : visExp.filter(e => e.userId === myId);
+  // Personal view: only my entries (treat unowned entries as mine); Team view: all visible entries
+  const allTime = isTeam ? visTime : visTime.filter(e => !e.userId || e.userId === myId);
+  const allExp  = isTeam ? visExp  : visExp.filter(e => !e.userId || e.userId === myId);
 
   // Visible clients only
   const clients = DB.clients().filter(c => canSeeClient(c));
@@ -2316,6 +2330,9 @@ async function init(){
 
   // Link this auth user to a team member record
   await ensureTeamMember(session.user);
+
+  // Backfill entries with no userId → current user
+  migrateUserIds();
 
   refreshUserSelect();
   navigate('dashboard');
