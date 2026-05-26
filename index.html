@@ -213,9 +213,18 @@ async function maybeImportLocalStorage() {
 // Ensure the logged-in auth user has a team_member record
 async function ensureTeamMember(authUser) {
   const members = DB.users();
-  const existing = members.find(m => m.authId === authUser.id);
+  // Primary: match by authId
+  let existing = members.find(m => m.authId === authUser.id);
+  // Fallback: match by email (handles members imported from localStorage without authId)
+  if (!existing && authUser.email) {
+    existing = members.find(m => m.email === authUser.email);
+    if (existing) {
+      // Backfill authId so we don't create a duplicate next time
+      DB.saveU(members.map(m => m.id === existing.id ? {...m, authId: authUser.id} : m));
+    }
+  }
   if (existing) {
-    if (!DB.settings().activeUserId) DB.saveSet({ ...DB.settings(), activeUserId: existing.id });
+    DB.saveSet({ ...DB.settings(), activeUserId: existing.id });
     return;
   }
   const colors = ['#0D9488','#6366F1','#D97706','#DC2626','#7C3AED','#0891B2','#65A30D','#DB2777'];
@@ -223,6 +232,32 @@ async function ensureTeamMember(authUser) {
   const newMember = { id: uid(), authId: authUser.id, email: authUser.email, name, color: colors[members.length % colors.length], createdAt: new Date().toISOString() };
   DB.saveU([...members, newMember]);
   DB.saveSet({ ...DB.settings(), activeUserId: newMember.id });
+}
+
+function deduplicateSelf() {
+  // Merge any duplicate "me" records (same email, different id) into the active user
+  const myId = DB.settings().activeUserId;
+  if (!myId) return;
+  const members = DB.users();
+  const me = members.find(m => m.id === myId);
+  if (!me) return;
+  // Find other records with the same email or name as me
+  const dupes = members.filter(m => m.id !== myId && (
+    (me.email && m.email === me.email) ||
+    (!me.email && !m.email && m.name === me.name)
+  ));
+  if (dupes.length === 0) return;
+  const dupeIds = new Set(dupes.map(d => d.id));
+  // Reassign time entries from duplicate IDs → my ID
+  const times = DB.time();
+  const updTimes = times.map(e => dupeIds.has(e.userId) ? {...e, userId: myId} : e);
+  save(KEYS.timeEntries, updTimes);
+  // Reassign expenses
+  const exps = DB.exps();
+  const updExps = exps.map(e => dupeIds.has(e.userId) ? {...e, userId: myId} : e);
+  save(KEYS.expenses, updExps);
+  // Remove duplicate member records
+  DB.saveU(members.filter(m => !dupeIds.has(m.id)));
 }
 
 // ── Login screen ──────────────────────────────
@@ -2330,6 +2365,9 @@ async function init(){
 
   // Link this auth user to a team member record
   await ensureTeamMember(session.user);
+
+  // Merge any duplicate "me" records (e.g. localStorage import + auth account mismatch)
+  deduplicateSelf();
 
   // Backfill entries with no userId → current user
   migrateUserIds();
