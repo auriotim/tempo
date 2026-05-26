@@ -241,10 +241,10 @@ function deduplicateSelf() {
   const members = DB.users();
   const me = members.find(m => m.id === myId);
   if (!me) return;
-  // Find other records with the same email or name as me
+  // Find other records with the same email OR same name (old records may lack email)
   const dupes = members.filter(m => m.id !== myId && (
-    (me.email && m.email === me.email) ||
-    (!me.email && !m.email && m.name === me.name)
+    (me.email && m.email && m.email === me.email) ||
+    (m.name && me.name && m.name === me.name)
   ));
   if (dupes.length === 0) return;
   const dupeIds = new Set(dupes.map(d => d.id));
