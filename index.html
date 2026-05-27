@@ -1400,8 +1400,7 @@ function renderBacklog() {
         </div>
       </div>
       <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-        ${canEdit?`<button onclick="event.stopPropagation();promoteToWeek('${item.id}')" title="Move to This Week" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-2 py-1 rounded font-medium whitespace-nowrap border border-teal-100">→ Week</button>`:''}
-        <button onclick="event.stopPropagation();archiveItem('${item.id}')" title="Archive" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-400 px-1.5 py-1 rounded border border-gray-100">✓</button>
+        <button onclick="event.stopPropagation();promoteToWeek('${item.id}')" title="Move to This Week" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-2 py-1 rounded font-medium whitespace-nowrap border border-teal-100">→ Week</button>
       </div>
     </div>`;
   }
