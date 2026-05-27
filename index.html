@@ -256,6 +256,10 @@ function deduplicateSelf() {
   const exps = DB.exps();
   const updExps = exps.map(e => dupeIds.has(e.userId) ? {...e, userId: myId} : e);
   save(KEYS.expenses, updExps);
+  // Reassign backlog createdBy
+  const backlog = DB.backlog();
+  const updBack = backlog.map(b => dupeIds.has(b.createdBy) ? {...b, createdBy: myId} : b);
+  DB.saveBack(updBack);
   // Remove duplicate member records
   DB.saveU(members.filter(m => !dupeIds.has(m.id)));
 }
@@ -1395,10 +1399,9 @@ function renderBacklog() {
           ${!item.dueDate&&stale?`<div class="text-xs text-amber-500 mt-1">${age}d untouched</div>`:!item.dueDate&&age>14?`<div class="text-xs text-gray-300 mt-0.5">${age}d</div>`:''}
         </div>
       </div>
-      <div class="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 bg-white pl-2 shadow-[-8px_0_8px_white]">
-        ${canEdit?`<button onclick="event.stopPropagation();promoteToWeek('${item.id}')" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-2 py-1 rounded font-medium whitespace-nowrap">→ Week</button>`:''}
-        ${canEdit?`<button onclick="event.stopPropagation();archiveItem('${item.id}')" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-2 py-1 rounded">Archive</button>`:''}
-        ${canEdit?`<button onclick="event.stopPropagation();delBacklogItem('${item.id}')" class="text-xs text-red-400 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-50">✕</button>`:''}
+      <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+        ${canEdit?`<button onclick="event.stopPropagation();promoteToWeek('${item.id}')" title="Move to This Week" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-2 py-1 rounded font-medium whitespace-nowrap border border-teal-100">→ Week</button>`:''}
+        <button onclick="event.stopPropagation();archiveItem('${item.id}')" title="Archive" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-400 px-1.5 py-1 rounded border border-gray-100">✓</button>
       </div>
     </div>`;
   }
@@ -1416,10 +1419,9 @@ function renderBacklog() {
           ${client||proj?`<div class="text-xs text-gray-400 mt-1">${client?`<span style="color:${client.color||'#6366F1'}">●</span> ${esc(client.name)}`:''}${proj?` › ${esc(proj.name)}`:''}</div>`:''}
         </div>
       </div>
-      <div class="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center gap-1 bg-white pl-2 shadow-[-8px_0_8px_white]">
-        <button onclick="event.stopPropagation();markItemDone('${item.id}')" class="text-xs bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded font-medium">✓ Done</button>
-        <button onclick="event.stopPropagation();pullToBacklog('${item.id}')" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-2 py-1 rounded whitespace-nowrap">← Backlog</button>
-        <button onclick="event.stopPropagation();delBacklogItem('${item.id}')" class="text-xs text-red-400 hover:text-red-600 px-1.5 py-1 rounded hover:bg-red-50">✕</button>
+      <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+        <button onclick="event.stopPropagation();markItemDone('${item.id}')" title="Mark done" class="text-xs bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded font-medium border border-green-100">✓ Done</button>
+        <button onclick="event.stopPropagation();pullToBacklog('${item.id}')" title="Send back to backlog" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-1.5 py-1 rounded border border-gray-100">← </button>
       </div>
     </div>`;
   }
@@ -2126,7 +2128,14 @@ function showBacklogModal(id=null) {
           </select>
         </div>
       </div>
-      ${item?`<div class="text-xs text-gray-400 pt-1">Currently in: ${inThisWeek?'📌 This Week':'📋 Backlog'}</div>`:''}
+      ${item?`
+      <div class="flex items-center justify-between pt-1 pb-1">
+        <span class="text-xs text-gray-400">Currently in: ${inThisWeek?'📌 This Week':'📋 Backlog'}</span>
+        ${inThisWeek
+          ?`<button onclick="pullToBacklog('${item.id}');closeModal()" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg font-medium">← Move to Backlog</button>`
+          :`<button onclick="promoteToWeek('${item.id}');closeModal()" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-medium border border-teal-100">→ Move to This Week</button>`
+        }
+      </div>`:''}
       <div class="flex justify-between items-center pt-2 border-t border-gray-100">
         ${item?`<button onclick="delBacklogItem('${item.id}')" class="text-red-500 text-sm hover:underline">Delete</button>`:'<span></span>'}
         <div class="flex gap-2">
