@@ -128,6 +128,18 @@ const KEYS = {
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 
+// ── Per-device active user ──────────────────────────────────────────────────
+// Stored in localStorage (NOT shared Supabase settings) so that one team
+// member logging in on their device cannot change whose view you see on yours.
+const _ACTIVE_USER_KEY = 'tempo_v1_active_user_id';
+function getActiveUserId() {
+  // localStorage first; fall back to legacy Supabase setting on first run
+  return localStorage.getItem(_ACTIVE_USER_KEY) || loadO(KEYS.settings).activeUserId || null;
+}
+function setActiveUserId(id) {
+  if (id) localStorage.setItem(_ACTIVE_USER_KEY, id);
+}
+
 // ═══════════════════════════════════════════════
 //  SUPABASE — config + in-memory cache
 // ═══════════════════════════════════════════════
@@ -224,19 +236,19 @@ async function ensureTeamMember(authUser) {
     }
   }
   if (existing) {
-    DB.saveSet({ ...DB.settings(), activeUserId: existing.id });
+    setActiveUserId(existing.id);  // per-device only — does not touch shared settings
     return;
   }
   const colors = ['#0D9488','#6366F1','#D97706','#DC2626','#7C3AED','#0891B2','#65A30D','#DB2777'];
   const name = authUser.user_metadata?.full_name || authUser.email.split('@')[0];
   const newMember = { id: uid(), authId: authUser.id, email: authUser.email, name, color: colors[members.length % colors.length], createdAt: new Date().toISOString() };
   DB.saveU([...members, newMember]);
-  DB.saveSet({ ...DB.settings(), activeUserId: newMember.id });
+  setActiveUserId(newMember.id);  // per-device only
 }
 
 function deduplicateSelf() {
   // Merge any duplicate "me" records (same email, different id) into the active user
-  const myId = DB.settings().activeUserId;
+  const myId = getActiveUserId();
   if (!myId) return;
   const members = DB.users();
   const me = members.find(m => m.id === myId);
@@ -498,11 +510,11 @@ const State = {
   },
 
   get activeUser() {
-    const { activeUserId } = DB.settings();
+    const id = getActiveUserId();
     const users = DB.users();
-    return users.find(u=>u.id===activeUserId) || users[0] || null;
+    return (id && users.find(u=>u.id===id)) || users[0] || null;
   },
-  setActiveUser(id) { const s=DB.settings(); s.activeUserId=id; DB.saveSet(s); },
+  setActiveUser(id) { setActiveUserId(id); refreshUserSelect(); render(); },
 };
 
 // ═══════════════════════════════════════════════
@@ -1686,7 +1698,7 @@ function renderSettings() {
             users.map(u=>`<div class="flex items-center gap-3 p-2.5 rounded-lg bg-gray-50">
               <div class="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0" style="background:${u.color||'#6366F1'}">${u.name.charAt(0).toUpperCase()}</div>
               <div class="flex-1 text-sm font-medium text-gray-700">${esc(u.name)}</div>
-              ${u.id===settings.activeUserId?'<span class="text-xs text-teal-600 font-semibold">Active</span>':`<button onclick="switchUser('${u.id}')" class="text-xs text-gray-400 hover:text-teal-600">Switch to</button>`}
+              ${u.id===getActiveUserId()?'<span class="text-xs text-teal-600 font-semibold">Active</span>':`<button onclick="switchUser('${u.id}')" class="text-xs text-gray-400 hover:text-teal-600">Switch to</button>`}
               <button onclick="delUser('${u.id}')" class="p-1 text-gray-300 hover:text-red-500">🗑</button>
             </div>`).join('')
           }
@@ -2347,7 +2359,8 @@ function render() {
 function refreshUserSelect(){
   const sel=document.getElementById('activeUserSelect'), users=DB.users(), settings=DB.settings();
   if(!sel)return;
-  sel.innerHTML=users.length===0?'<option value="">No users</option>':users.map(u=>`<option value="${u.id}"${u.id===settings.activeUserId?' selected':''}>${esc(u.name)}</option>`).join('');
+  const activeId = getActiveUserId();
+  sel.innerHTML=users.length===0?'<option value="">No users</option>':users.map(u=>`<option value="${u.id}"${u.id===activeId?' selected':''}>${esc(u.name)}</option>`).join('');
   sel.onchange=()=>State.setActiveUser(sel.value);
 }
 
