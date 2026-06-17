@@ -1565,13 +1565,16 @@ function renderReports() {
   const usedIds=new Set([...te.map(e=>e.clientId),...exp.map(e=>e.clientId)]);
   const rows=clients.filter(c=>usedIds.has(c.id)).map(c=>{
     const billable=te.filter(e=>e.clientId===c.id&&e.billable);
+    const expT=exp.filter(e=>e.clientId===c.id).reduce((s,e)=>s+(e.amount||0),0);
     const hasAnyRate=c.rate||billable.some(e=>{const p=e.projectId?DB.proj(e.projectId):null;return p?.rate;});
-    const value=hasAnyRate?billable.reduce((s,e)=>{
+    const laborVal=hasAnyRate?billable.reduce((s,e)=>{
       const proj=e.projectId?DB.proj(e.projectId):null;
       const rate=proj?.rate??c.rate??0;
       return s+e.hours*rate;
     },0):null;
-    return {c,hrs:te.filter(e=>e.clientId===c.id).reduce((s,e)=>s+e.hours,0),expT:exp.filter(e=>e.clientId===c.id).reduce((s,e)=>s+(e.amount||0),0),value};
+    // Invoice total = labor (hours × rate) + reimbursable expenses
+    const value=laborVal!==null?laborVal+expT:null;
+    return {c,hrs:te.filter(e=>e.clientId===c.id).reduce((s,e)=>s+e.hours,0),expT,value};
   }).sort((a,b)=>b.hrs-a.hrs);
   const totHrs=rows.reduce((s,r)=>s+r.hrs,0),totExp=rows.reduce((s,r)=>s+r.expT,0),totVal=rows.reduce((s,r)=>s+(r.value||0),0);
   const hasRate=rows.some(r=>r.value!==null);
@@ -1595,7 +1598,7 @@ function renderReports() {
     <div class="grid grid-cols-3 gap-4 mb-6">
       <div class="card p-5 text-center"><div class="text-2xl font-bold text-gray-900">${fmtHours(totHrs)}</div><div class="text-xs text-gray-400 mt-1 uppercase tracking-wide">Hours</div></div>
       <div class="card p-5 text-center"><div class="text-2xl font-bold text-gray-900">${fmtMoney(totExp)}</div><div class="text-xs text-gray-400 mt-1 uppercase tracking-wide">Expenses</div></div>
-      <div class="card p-5 text-center"><div class="text-2xl font-bold text-teal-600">${hasRate?fmtMoney(totVal):'—'}</div><div class="text-xs text-gray-400 mt-1 uppercase tracking-wide">Billed Value</div></div>
+      <div class="card p-5 text-center"><div class="text-2xl font-bold text-teal-600">${hasRate?fmtMoney(totVal):'—'}</div><div class="text-xs text-gray-400 mt-1 uppercase tracking-wide">Invoice Total</div></div>
     </div>
     <div class="mb-6">
       <div class="text-sm font-semibold text-gray-700 mb-3">By Client</div>
@@ -1605,7 +1608,7 @@ function renderReports() {
             <thead><tr class="border-b border-gray-100 text-xs text-gray-500 font-semibold uppercase tracking-wide">
               <th class="text-left px-4 py-3">Client</th><th class="text-left px-4 py-3">Type</th>
               <th class="text-right px-4 py-3">Hours</th><th class="text-right px-4 py-3">Expenses</th>
-              ${hasRate?'<th class="text-right px-4 py-3">Value</th>':''}
+              ${hasRate?'<th class="text-right px-4 py-3">Invoice Total</th>':''}
             </tr></thead>
             <tbody>
               ${rows.map(r=>`<tr class="border-b border-gray-50 hover:bg-gray-50">

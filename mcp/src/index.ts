@@ -82,7 +82,7 @@ interface Expense {
   userId: string
   date: string
   amount: number
-  description: string
+  notes: string        // Tempo stores this as 'notes', not 'description'
   category?: string
   createdAt: string
   visibility?: string
@@ -736,7 +736,7 @@ async function handleListExpenses(rawArgs: unknown): Promise<string> {
     const cName = clientName(clients, e.clientId)
     const pName = projectName(projects, e.projectId ?? null)
     const proj  = pName ? ` / ${pName}` : ''
-    return `${e.date}  $${e.amount.toFixed(2)}  ${cName}${proj}  ${e.description}\n  id: ${e.id}`
+    return `${e.date}  $${e.amount.toFixed(2)}  ${cName}${proj}  ${e.notes ?? ''}\n  id: ${e.id}`
   })
 
   return `${lines.join('\n')}\n\nTotal: $${total.toFixed(2)} (${entries.length} expense${entries.length === 1 ? '' : 's'})`
@@ -779,7 +779,7 @@ async function handleAddExpense(rawArgs: unknown): Promise<string> {
     userId:      member.id,
     date:        args.date ?? todayStr(),
     amount:      args.amount,
-    description: args.description,
+    notes:       args.description,   // Tempo's field name is 'notes'
     createdAt:   new Date().toISOString(),
     visibility:  'public',
   }
@@ -794,7 +794,7 @@ async function handleAddExpense(rawArgs: unknown): Promise<string> {
   return (
     `Expense added: $${expense.amount.toFixed(2)} on ${expense.date}\n` +
     `  Client: ${client.name}${pName}\n` +
-    `  Description: ${expense.description}\n` +
+    `  Notes: ${expense.notes}\n` +
     `  id: ${expense.id}`
   )
 }
