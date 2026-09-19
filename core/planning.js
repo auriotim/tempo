@@ -190,7 +190,8 @@
    * Build the swimlane board: one lane per client (in client order, "No client"
    * last), each split into project sub-lanes, each with backlog/plan/done cells.
    * `items` should already be filtered for visibility. Cards are
-   * { item, carried, attention, plan, chip } so renderers need no rules.
+   * { item, carried, attention, plan, chip, projectName } so renderers need no rules.
+   * Each lane also has `cells` — its cards across all projects, sorted.
    * `includeEmpty` adds lanes/sub-lanes for clients and projects with no cards.
    */
   function buildBoard({ items, clients, projects, unit, anchor, today, nowIso, includeEmpty = false }) {
@@ -233,7 +234,7 @@
       const sub = subFor(lane, item.projectId);
       // Chip only when the plan differs from the column's own period.
       const chip = plan && !(plan.unit === unit && plan.start === view.start) && column !== 'done' ? planChip(plan, today) : '';
-      sub.cells[column].push({ item, carried, attention: att, plan, chip });
+      sub.cells[column].push({ item, carried, attention: att, plan, chip, projectName: sub.project ? sub.project.name : null });
       sub.counts[column]++; lane.counts[column]++; totals[column]++;
       if (att) { lane.attention++; attention++; }
     }
@@ -248,7 +249,10 @@
       const subs = [...lane.subs.values()].sort(order(projIdx));
       subs.forEach((s) => { s.cells.backlog.sort(byScore); s.cells.plan.sort(byScore); s.cells.done.sort(byDone); });
       const total = lane.counts.backlog + lane.counts.plan + lane.counts.done;
-      return { ...lane, subs, total };
+      // Lane-level cells (all projects merged) for the collapsed at-a-glance view.
+      const merged = (col, cmp) => subs.flatMap((s) => s.cells[col]).sort(cmp);
+      const cells = { backlog: merged('backlog', byScore), plan: merged('plan', byScore), done: merged('done', byDone) };
+      return { ...lane, subs, total, cells };
     });
 
     return {

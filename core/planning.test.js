@@ -57,6 +57,8 @@ assert.equal(board.lanes[0].name, 'Sesame');
 assert.equal(board.lanes[1].name, 'No client');
 assert.equal(board.lanes[1].subs[0].name, 'No project');
 assert.equal(board.attention, 1);
+assert.deepEqual(board.lanes[0].cells.plan.map((c) => [c.item.weekOf, c.projectName]).sort(), [['2026-08-03', null], ['2026-09-14', null]]);
+assert.equal(board.lanes[0].cells.plan.length + board.lanes[0].cells.backlog.length + board.lanes[0].cells.done.length, board.lanes[0].total);
 assert.equal(board.view.title, 'This Week');
 
 const seeded = P.buildBoard({

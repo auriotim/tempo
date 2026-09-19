@@ -49,10 +49,19 @@
     /* Backlog board: client swimlanes × Backlog / Plan / Done */
     .board { overflow-x: auto; }
     .board-inner { min-width: 780px; }
-    .bgrid { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,0.85fr); gap: 10px; }
+    .bgrid { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,0.85fr); gap: 10px; align-items: start; }
+    .bglance { padding: 0 10px 6px; }
+    .bglance .bcell { min-height: 0; margin-bottom: 0; padding: 0; background: transparent !important; }
+    .brow { display: flex; align-items: center; gap: 6px; font-size: 0.8125rem; line-height: 1.25rem; padding: 2px 6px; border-radius: 0.3rem; cursor: pointer; min-width: 0; white-space: nowrap; }
+    .brow:hover { background: #F3F4F6; }
+    .brow-att { background: #FFFBEB; }
+    .brow-done { font-size: 0.75rem; }
+    .brow-btn { font-size: 0.75rem; line-height: 1; padding: 3px 5px; border-radius: 0.25rem; }
+    .blane-empty .blane-head { padding-top: 5px; padding-bottom: 5px; }
+    .bcell:empty { background: transparent !important; }
     .bcols { padding: 0 11px 8px; }
     .bcol-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #6B7280; }
-    .blane { background: white; border: 1px solid #E5E7EB; border-radius: 0.6rem; margin-bottom: 8px; overflow: hidden; }
+    .blane { background: white; border: 1px solid #E5E7EB; border-radius: 0.6rem; margin-bottom: 6px; overflow: hidden; }
     .blane-head { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,0.85fr); gap: 10px; align-items: center; padding: 8px 10px; cursor: pointer; user-select: none; }
     .blane-head:hover { background: #F9FAFB; }
     .bsub { border-top: 1px solid #F3F4F6; padding: 6px 10px 4px; }
@@ -1376,7 +1385,7 @@ function boardToday() { State.board.anchor = null; render(); }
 
 function laneIsOpen(lane) {
   const saved = (BoardPrefs.get().open || {})[lane.key];
-  return saved !== undefined ? saved : (lane.counts.plan > 0 || lane.attention > 0);
+  return saved !== undefined ? saved : false;
 }
 function toggleLane(key, open) { BoardPrefs.set({ open: { ...(BoardPrefs.get().open || {}), [key]: open } }); render(); }
 function setAllLanes(open) {
@@ -1445,7 +1454,31 @@ function renderBacklog() {
     </div>`;
   }
 
-  const cell = (cards, column) => `<div class="bcell" data-col="${column}" ondragover="boardDragOver(event)" ondragleave="this.classList.remove('bcell-over')" ondrop="boardDrop(event,'${column}')">${cards.map(c=>card(c,column)).join('')}</div>`;
+  function row(c, column, showProject) {
+    const { item } = c;
+    const done = column === 'done';
+    const canEdit = canEditBacklogItem(item);
+    const due = done ? '' : dueDateChip(item.dueDate);
+    const act = !canEdit ? '' : column==='plan'
+      ? `<button onclick="event.stopPropagation();moveBacklogItem('${item.id}','done')" title="Mark done" class="brow-btn text-green-700 hover:bg-green-100">✓</button>`
+      : column==='backlog'
+      ? `<button onclick="event.stopPropagation();moveBacklogItem('${item.id}','plan')" title="Plan for ${v.title.toLowerCase()}" class="brow-btn text-teal-700 hover:bg-teal-100">→</button>` : '';
+    return `<div class="brow ${c.attention?'brow-att':''} ${done?'brow-done':''}" ${canEdit?`draggable="true" ondragstart="boardDragStart(event,'${item.id}')"`:''} onclick="editBacklogItem('${item.id}')" title="${esc(item.title)}">
+      ${done?'<span class="text-green-600 text-xs flex-shrink-0">✓</span>':`<span class="text-[10px] flex-shrink-0">${priIcon[item.priority]||'⚪'}</span>`}
+      ${item.urgent&&!done?'<span class="text-xs text-red-500 flex-shrink-0">⚡</span>':''}
+      <span class="truncate ${done?'text-gray-400':'text-gray-800'}">${esc(item.title)}</span>
+      ${showProject&&c.projectName?`<span class="text-xs text-gray-400 truncate flex-shrink-[2]">· ${esc(c.projectName)}</span>`:''}
+      <span class="ml-auto flex items-center gap-1 flex-shrink-0">
+        ${c.carried?'<span class="text-xs text-amber-600" title="Carried over from an earlier period">↪</span>':''}
+        ${c.chip&&!c.carried?`<span class="text-xs text-sky-700">📅 ${esc(c.chip)}</span>`:''}
+        ${due}
+        ${done?`<span class="text-xs text-gray-400">${fmtShort(P.localDate(item.completedAt))}</span>`:''}
+        ${act}
+      </span>
+    </div>`;
+  }
+  const more = (n, what) => n>0 ? `<div class="text-xs text-gray-400 px-1.5 py-0.5">+${n} ${what}</div>` : '';
+  const cell = (cards, column) => `<div class="bcell" data-col="${column}" ondragover="boardDragOver(event)" ondragleave="this.classList.remove('bcell-over')" ondrop="boardDrop(event,'${column}')">${cards.map(c=>column==='done'?row(c,column,false):card(c,column)).join('')}</div>`;
   const count = (n, cls='') => `<span class="text-xs tabular-nums ${n?cls||'text-gray-500':'text-gray-300'}">${n}</span>`;
 
   function lane(l) {
@@ -1462,20 +1495,32 @@ function renderBacklog() {
       <div class="pl-1">${count(l.counts.plan,'text-teal-700 font-semibold')}</div>
       <div class="pl-1">${count(l.counts.done,'text-green-700')}</div>
     </div>`;
-    if(!open) return `<div class="blane">${head}</div>`;
-    const subs = l.subs.map(s => {
-      const clientId = l.client ? l.client.id : '';
+    if(!open) {
+      const att = l.cells.backlog.filter(c => c.attention);
+      const DONE_MAX = 3;
+      const body = (att.length || l.counts.plan || l.counts.done) ? `<div class="bgrid bglance">
+        <div class="bcell" data-col="backlog" ondragover="boardDragOver(event)" ondragleave="this.classList.remove('bcell-over')" ondrop="boardDrop(event,'backlog')">${att.map(c=>row(c,'backlog',true)).join('')}${att.length?more(l.counts.backlog-att.length,'more in backlog'):''}</div>
+        <div class="bcell" data-col="plan" ondragover="boardDragOver(event)" ondragleave="this.classList.remove('bcell-over')" ondrop="boardDrop(event,'plan')">${l.cells.plan.map(c=>row(c,'plan',true)).join('')}</div>
+        <div class="bcell" data-col="done" ondragover="boardDragOver(event)" ondragleave="this.classList.remove('bcell-over')" ondrop="boardDrop(event,'done')">${l.cells.done.slice(0,DONE_MAX).map(c=>row(c,'done',false)).join('')}${more(l.counts.done-DONE_MAX,'more')}</div>
+      </div>` : '';
+      return `<div class="blane ${l.total?'':'blane-empty'}">${head}${body}</div>`;
+    }
+    const clientId = l.client ? l.client.id : '';
+    const isEmpty = s => !(s.counts.backlog + s.counts.plan + s.counts.done);
+    const addLink = s => `<button onclick="showBacklogModal(null,{clientId:'${clientId}',projectId:'${s.project?s.project.id:''}'})" class="text-xs text-gray-400 hover:text-teal-600 hover:underline">+ ${esc(s.name)}</button>`;
+    const emptySubs = l.subs.filter(isEmpty);
+    const subs = l.subs.filter(s => !isEmpty(s)).map(s => {
       const projectId = s.project ? s.project.id : '';
-      const empty = !(s.counts.backlog + s.counts.plan + s.counts.done);
-      return `<div class="bsub ${empty?'bsub-empty':''}">
+      return `<div class="bsub">
         <div class="bsub-head">
           <span class="text-xs font-medium ${s.project?'text-gray-500':'text-gray-400 italic'}">${esc(s.name)}</span>
           <button onclick="showBacklogModal(null,{clientId:'${clientId}',projectId:'${projectId}'})" class="text-xs text-gray-300 hover:text-teal-600 px-1" title="Add item to ${esc(s.name)}">+</button>
         </div>
-        ${empty?'':`<div class="bgrid">${cell(s.cells.backlog,'backlog')}${cell(s.cells.plan,'plan')}${cell(s.cells.done,'done')}</div>`}
+        <div class="bgrid">${cell(s.cells.backlog,'backlog')}${cell(s.cells.plan,'plan')}${cell(s.cells.done,'done')}</div>
       </div>`;
     }).join('');
-    return `<div class="blane">${head}${subs || `<div class="text-xs text-gray-300 italic px-3 py-2">No projects</div>`}</div>`;
+    const adds = emptySubs.length ? `<div class="bsub bsub-empty flex items-center gap-3 flex-wrap"><span class="text-xs text-gray-300">Add to:</span>${emptySubs.map(addLink).join('')}</div>` : '';
+    return `<div class="blane">${head}${subs}${adds}</div>`;
   }
 
   return `
