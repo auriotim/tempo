@@ -28,6 +28,12 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
+import { createRequire } from 'node:module'
+
+// Shared planning core (same rules as the app): periods, scheduling, done/reopen.
+const Planning = createRequire(import.meta.url)('../../core/planning.js')
+type Unit = 'week' | 'month' | 'quarter' | 'year'
+const UNITS = ['week', 'month', 'quarter', 'year'] as const
 
 // ── Env ────────────────────────────────────────────────────────────────────────
 
@@ -94,12 +100,16 @@ interface BacklogItem {
   clientId: string
   projectId: string | null
   priority: 'high' | 'medium' | 'low'
-  weekOf: string | null          // ISO date of Monday — null = not scheduled
-  archivedAt: string | null      // non-null = done/archived
+  weekOf: string | null          // ISO date of Monday — week-level plan
+  planUnit?: 'month' | 'quarter' | 'year' | null  // coarser plan (see core/planning.js)
+  planStart?: string | null
+  archivedAt: string | null      // non-null = off the board (done or shelved)
+  completedAt?: string | null    // non-null = done
   dueDate: string | null
   urgent: boolean
   recurFreq: string | null
   notes: string
+  description?: string           // the app edits this field; notes is the MCP legacy name
   createdBy: string
   lastTouchedAt: string | null
   createdAt: string
@@ -143,12 +153,10 @@ function todayStr(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function currentWeek(): string {
-  const d = new Date()
-  const day = d.getDay()
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
-  const m = new Date(d.getFullYear(), d.getMonth(), diff)
-  return `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}-${String(m.getDate()).padStart(2, '0')}`
+/** "Wk Sep 14" / "Oct" / "Q4" / "unscheduled" — where an item is planned. */
+function planText(b: BacklogItem): string {
+  const plan = Planning.itemPlan(b)
+  return plan ? `planned: ${Planning.planChip(plan, todayStr())} (${plan.unit} of ${plan.start})` : 'unscheduled'
 }
 
 function firstOfMonth(): string {
@@ -343,18 +351,23 @@ const TOOLS: Tool[] = [
   {
     name: 'get_backlog',
     description:
-      'List backlog items. By default returns active (not archived) items scheduled for ' +
-      'this week plus unscheduled items. Use filter="all" to see everything, ' +
-      'filter="this_week" for just this week\'s scheduled work, ' +
-      'filter="unscheduled" for items not yet assigned to a week, ' +
-      'filter="done" for recently archived items.',
+      'List backlog items. Items can be planned for a week, month, quarter or year. ' +
+      'filter="active" (default) = all open items; "planned" = the board\'s plan column for the ' +
+      'current `period` (items planned inside it, plus open items carried over from earlier periods); ' +
+      '"this_week" = planned with period=week; "unscheduled" = open items with no plan; ' +
+      '"done" = items completed in the current `period` (or all done/archived items if no period); "all" = everything.',
     inputSchema: {
       type: 'object',
       properties: {
         filter: {
           type: 'string',
-          enum: ['active', 'this_week', 'unscheduled', 'done', 'all'],
-          description: 'Which items to show (default: "active" = this_week + unscheduled)',
+          enum: ['active', 'planned', 'this_week', 'unscheduled', 'done', 'all'],
+          description: 'Which items to show (default: "active" = all open items)',
+        },
+        period: {
+          type: 'string',
+          enum: ['week', 'month', 'quarter', 'year'],
+          description: 'Period for filter="planned" (default week) and filter="done" (default: no period limit)',
         },
         client_name: {
           type: 'string',
@@ -406,6 +419,11 @@ const TOOLS: Tool[] = [
         schedule_this_week: {
           type: 'boolean',
           description: 'Set true to schedule for the current week (default false = unscheduled)',
+        },
+        plan_period: {
+          type: 'string',
+          enum: ['week', 'month', 'quarter', 'year'],
+          description: 'Plan into the current week/month/quarter/year (overrides schedule_this_week)',
         },
         urgent: {
           type: 'boolean',
@@ -460,9 +478,18 @@ const TOOLS: Tool[] = [
           type: 'string',
           description: 'Move to this week\'s Monday date (YYYY-MM-DD). Use "this_week" for the current week, "none" to unschedule.',
         },
+        plan_period: {
+          type: 'string',
+          enum: ['week', 'month', 'quarter', 'year', 'none'],
+          description: 'Plan into a week/month/quarter/year ("none" = back to unscheduled backlog). Uses plan_date to pick which one.',
+        },
+        plan_date: {
+          type: 'string',
+          description: 'Any date YYYY-MM-DD inside the target period (default today), e.g. 2026-10-15 with plan_period=quarter → Q4 2026',
+        },
         mark_done: {
           type: 'boolean',
-          description: 'Archive/complete the item',
+          description: 'Mark the item done (recurring items get a fresh copy in the backlog)',
         },
         reopen: {
           type: 'boolean',
@@ -802,7 +829,8 @@ async function handleAddExpense(rawArgs: unknown): Promise<string> {
 // get_backlog
 
 const GetBacklogArgs = z.object({
-  filter:      z.enum(['active', 'this_week', 'unscheduled', 'done', 'all']).default('active'),
+  filter:      z.enum(['active', 'planned', 'this_week', 'unscheduled', 'done', 'all']).default('active'),
+  period:      z.enum(UNITS).optional(),
   client_name: z.string().optional(),
   priority:    z.enum(['high', 'medium', 'low']).optional(),
   limit:       z.number().int().min(1).max(200).default(50),
@@ -812,19 +840,24 @@ async function handleGetBacklog(rawArgs: unknown): Promise<string> {
   const args = GetBacklogArgs.parse(rawArgs ?? {})
   const { clients, projects, backlog, members } = await loadAll()
 
-  const cw = currentWeek()
+  const today = todayStr()
+  const viewOf = (unit: Unit) => Planning.period(unit, Planning.periodStart(unit, today))
+  const column = (b: BacklogItem, unit: Unit) => Planning.classify(b, viewOf(unit), today).column
   let items = [...backlog]
 
-  // Apply status filter
+  // Apply status filter (column rules come from the shared planning core)
   switch (args.filter) {
     case 'this_week':
-      items = items.filter(b => b.weekOf === cw && !b.archivedAt)
+      items = items.filter(b => column(b, 'week') === 'plan')
+      break
+    case 'planned':
+      items = items.filter(b => column(b, args.period ?? 'week') === 'plan')
       break
     case 'unscheduled':
-      items = items.filter(b => !b.weekOf && !b.archivedAt)
+      items = items.filter(b => !b.archivedAt && !Planning.itemPlan(b))
       break
     case 'done':
-      items = items.filter(b => !!b.archivedAt)
+      items = args.period ? items.filter(b => column(b, args.period!) === 'done') : items.filter(b => !!b.archivedAt)
       break
     case 'active':
       items = items.filter(b => !b.archivedAt)
@@ -857,17 +890,20 @@ async function handleGetBacklog(rawArgs: unknown): Promise<string> {
   items = items.slice(0, args.limit)
   if (items.length === 0) return `No backlog items found (filter: ${args.filter}).`
 
-  const header = `Backlog (${args.filter}, ${items.length} item${items.length === 1 ? '' : 's'})\n`
+  const scope = args.period && ['planned', 'done'].includes(args.filter) ? ` this ${args.period}` : ''
+  const header = `Backlog (${args.filter}${scope}, ${items.length} item${items.length === 1 ? '' : 's'})\n`
   const body = items
     .map(b => {
       const cName = clientName(clients, b.clientId)
       const pName = projectName(projects, b.projectId ?? null)
       const proj  = pName ? ` / ${pName}` : ''
-      const week  = b.weekOf ? ` [week: ${b.weekOf}]` : ' [unscheduled]'
+      const week  = ` [${planText(b)}]`
       const due   = b.dueDate ? ` due: ${b.dueDate}` : ''
       const urgentFlag = b.urgent ? ' ⚡ URGENT' : ''
-      const done  = b.archivedAt ? ` ✓ done ${b.archivedAt.slice(0, 10)}` : ''
-      const notes = b.notes ? `\n    notes: ${b.notes}` : ''
+      const done  = b.completedAt ? ` ✓ done ${Planning.localDate(b.completedAt)}`
+                  : b.archivedAt ? ` (archived ${Planning.localDate(b.archivedAt)})` : ''
+      const text  = b.description || b.notes
+      const notes = text ? `\n    notes: ${text}` : ''
       return (
         `[${b.priority.toUpperCase()}]${urgentFlag} ${b.title}${done}\n` +
         `    ${cName}${proj}${week}${due}${notes}\n    id: ${b.id}`
@@ -888,6 +924,7 @@ const AddBacklogItemArgs = z.object({
   notes:               z.string().optional(),
   due_date:            z.string().optional(),
   schedule_this_week:  z.boolean().default(false),
+  plan_period:         z.enum(UNITS).optional(),
   urgent:              z.boolean().default(false),
   user_name:           z.string().optional(),
 })
@@ -917,23 +954,28 @@ async function handleAddBacklogItem(rawArgs: unknown): Promise<string> {
 
   const member = resolveMember(members, args.user_name ?? '')
 
-  const item: BacklogItem = {
+  let item: BacklogItem = {
     id:            uid(),
     title:         args.title,
     clientId,
     projectId,
     priority:      args.priority,
-    weekOf:        args.schedule_this_week ? currentWeek() : null,
+    weekOf:        null,
+    planUnit:      null,
+    planStart:     null,
     archivedAt:    null,
     dueDate:       args.due_date ?? null,
     urgent:        args.urgent,
     recurFreq:     null,
     notes:         args.notes ?? '',
+    description:   args.notes ?? '',
     createdBy:     member?.id ?? '',
     lastTouchedAt: null,
     createdAt:     new Date().toISOString(),
     visibility:    'public',
   }
+  const planUnit = args.plan_period ?? (args.schedule_this_week ? 'week' : null)
+  if (planUnit) item = Planning.withPlan(item, planUnit, todayStr(), item.createdAt)
 
   const { error } = await supabase
     .from('backlog_items')
@@ -942,7 +984,7 @@ async function handleAddBacklogItem(rawArgs: unknown): Promise<string> {
   if (error) return `Failed to create backlog item: ${error.message}`
 
   const cName = clientName(clients, clientId)
-  const weekStr = item.weekOf ? `scheduled for week of ${item.weekOf}` : 'unscheduled'
+  const weekStr = planText(item)
   return (
     `Backlog item created (${weekStr}):\n` +
     `  [${item.priority.toUpperCase()}] ${item.title}\n` +
@@ -963,6 +1005,8 @@ const UpdateBacklogItemArgs = z.object({
   due_date:      z.string().optional(),
   urgent:        z.boolean().optional(),
   schedule_week: z.string().optional(),
+  plan_period:   z.enum([...UNITS, 'none']).optional(),
+  plan_date:     z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   mark_done:     z.boolean().optional(),
   reopen:        z.boolean().optional(),
 })
@@ -992,46 +1036,52 @@ async function handleUpdateBacklogItem(rawArgs: unknown): Promise<string> {
   if (!item) return `Backlog item not found.`
 
   // Apply changes
-  const updated: BacklogItem = { ...item }
+  const now = new Date().toISOString()
+  let updated: BacklogItem = { ...item }
+  let respawn: BacklogItem | null = null
 
   if (args.title     !== undefined) updated.title    = args.title
   if (args.priority  !== undefined) updated.priority = args.priority
-  if (args.notes     !== undefined) updated.notes    = args.notes
+  if (args.notes     !== undefined) { updated.notes = args.notes; updated.description = args.notes }
   if (args.urgent    !== undefined) updated.urgent   = args.urgent
 
   if (args.due_date !== undefined) {
     updated.dueDate = args.due_date === '' ? null : args.due_date
   }
 
-  if (args.schedule_week !== undefined) {
-    if (args.schedule_week === 'none') {
-      updated.weekOf = null
-    } else if (args.schedule_week === 'this_week') {
-      updated.weekOf = currentWeek()
-    } else {
-      updated.weekOf = args.schedule_week
-    }
-  }
-
-  if (args.mark_done) {
-    updated.archivedAt = new Date().toISOString()
-    updated.weekOf     = null
-  }
   if (args.reopen) {
-    updated.archivedAt = null
+    updated = Planning.reopenItem(updated, now, null)
   }
 
-  updated.lastTouchedAt = new Date().toISOString()
+  if (args.schedule_week !== undefined) {
+    updated = args.schedule_week === 'none'
+      ? Planning.withoutPlan(updated, now)
+      : Planning.withPlan(updated, 'week', args.schedule_week === 'this_week' ? todayStr() : args.schedule_week, now)
+  }
+  if (args.plan_period !== undefined) {
+    updated = args.plan_period === 'none'
+      ? Planning.withoutPlan(updated, now)
+      : Planning.withPlan(updated, args.plan_period, args.plan_date ?? todayStr(), now)
+  }
 
-  const { error } = await supabase
-    .from('backlog_items')
-    .upsert({ id: updated.id, data: updated, updated_at: new Date().toISOString() })
+  if (args.mark_done && !updated.completedAt) {
+    const res = Planning.completeItem(updated, now, uid())
+    updated = res.done
+    respawn = res.next
+  }
+
+  updated.lastTouchedAt = now
+
+  const rows = [updated, ...(respawn ? [respawn] : [])]
+    .map(b => ({ id: b.id, data: b, updated_at: now }))
+  const { error } = await supabase.from('backlog_items').upsert(rows)
 
   if (error) return `Failed to update backlog item: ${error.message}`
 
   const cName  = clientName(clients, updated.clientId)
-  const doneStr  = updated.archivedAt ? ` ✓ done ${updated.archivedAt.slice(0, 10)}` : ''
-  const weekStr  = updated.weekOf ? ` [week: ${updated.weekOf}]` : ' [unscheduled]'
+  const doneStr  = updated.completedAt ? ` ✓ done ${Planning.localDate(updated.completedAt)}`
+                 : updated.archivedAt ? ' (archived)' : ''
+  const weekStr  = ` [${planText(updated)}]` + (respawn ? `\n  Recurring — next occurrence added (id: ${respawn.id})` : '')
   return (
     `Updated successfully.\n` +
     `[${updated.priority.toUpperCase()}]${updated.urgent ? ' ⚡' : ''} ${updated.title}${doneStr}\n` +

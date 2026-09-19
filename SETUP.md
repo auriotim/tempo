@@ -6,6 +6,9 @@ Single-file app (`index.html`) with Supabase sync.
 Open `index.html` in any browser or serve it via Netlify.
 No build step required.
 
+Planning rules (periods, carry-over, done, recurring) live in `core/planning.js`, which both
+the app and the MCP server load. Tests: `node core/planning.test.js`.
+
 ---
 
 ## Phase 2 — MCP Server ✅
@@ -21,9 +24,9 @@ and Claude Code via nine tools:
 | `add_time_entry` | Log a new time entry by client name |
 | `list_expenses` | Browse expenses with filters |
 | `add_expense` | Add an expense entry |
-| `get_backlog` | List backlog items (active / this week / unscheduled / done) |
-| `add_backlog_item` | Create a backlog item |
-| `update_backlog_item` | Change priority, schedule to a week, mark done, etc. |
+| `get_backlog` | List backlog items (active / planned for a week·month·quarter·year / unscheduled / done) |
+| `add_backlog_item` | Create a backlog item, optionally planned into the current week/month/quarter/year |
+| `update_backlog_item` | Change priority, plan into a period, mark done (recurring respawns), reopen |
 
 ### 1. Get your Supabase service-role key
 

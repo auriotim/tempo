@@ -6,6 +6,7 @@
   <title>Tempo — Time & Expense Tracker</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="core/planning.js"></script>
   <style>
     * { box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
@@ -45,9 +46,32 @@
     .badge-internal { background: #F3F4F6; color: #6B7280; }
     .timer-display { font-size: 3.75rem; font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1; }
     .timer-running { color: #0D9488; }
-    .kanban-col { min-height: 180px; flex: 1; min-width: 220px; }
-    .kanban-card { background: white; border: 1px solid #E5E7EB; border-radius: 0.5rem; padding: 0.75rem; margin-bottom: 0.5rem; cursor: pointer; transition: box-shadow 0.12s; }
-    .kanban-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); border-color: #D1D5DB; }
+    /* Backlog board: client swimlanes × Backlog / Plan / Done */
+    .board { overflow-x: auto; }
+    .board-inner { min-width: 780px; }
+    .bgrid { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,0.85fr); gap: 10px; }
+    .bcols { padding: 0 11px 8px; }
+    .bcol-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #6B7280; }
+    .blane { background: white; border: 1px solid #E5E7EB; border-radius: 0.6rem; margin-bottom: 8px; overflow: hidden; }
+    .blane-head { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,0.85fr); gap: 10px; align-items: center; padding: 8px 10px; cursor: pointer; user-select: none; }
+    .blane-head:hover { background: #F9FAFB; }
+    .bsub { border-top: 1px solid #F3F4F6; padding: 6px 10px 4px; }
+    .bsub-head { display: flex; align-items: center; gap: 2px; margin-bottom: 4px; }
+    .bsub-empty { padding-top: 3px; padding-bottom: 3px; }
+    .bsub-empty .bsub-head { margin-bottom: 0; opacity: 0.6; }
+    .bcell { min-height: 26px; border-radius: 0.4rem; padding: 3px; margin-bottom: 4px; transition: background 0.1s; }
+    .bcell[data-col="plan"] { background: #F0FDFA; }
+    .bcell[data-col="done"] { background: #F9FAFB; }
+    .bcell-over { outline: 2px dashed #14B8A6; outline-offset: -2px; background: #CCFBF1 !important; }
+    .bcard { background: white; border: 1px solid #E5E7EB; border-radius: 0.45rem; padding: 0.45rem 0.6rem; margin-bottom: 4px; cursor: pointer; transition: box-shadow 0.12s, border-color 0.12s; }
+    .bcard:last-child { margin-bottom: 0; }
+    .bcard:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); border-color: #D1D5DB; }
+    .bcard[draggable="true"] { cursor: grab; }
+    .bcard-att { border-color: #FCD34D; background: #FFFBEB; }
+    .bcard-done { background: transparent; border-color: #EEF0F2; }
+    .seg { display: inline-flex; background: #F3F4F6; border-radius: 0.5rem; padding: 2px; }
+    .seg button { font-size: 0.75rem; padding: 3px 10px; border-radius: 0.4rem; color: #6B7280; }
+    .seg button.on { background: white; color: #111827; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
     #toastContainer { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 200; pointer-events: none; }
     .toast { background: #111827; color: white; padding: 0.7rem 1.1rem; border-radius: 0.5rem; margin-top: 0.5rem; font-size: 0.85rem; animation: slideIn 0.2s ease; }
     .toast-error { background: #991B1B; }
@@ -500,6 +524,7 @@ const State = {
   timerTick: null,
   expanded: new Set(),
   groomMode: false,
+  board: { unit: null, anchor: null },  // backlog board period; anchor null = today
   dashView: 'personal',   // 'personal' | 'team'
 
   filters: {
@@ -523,10 +548,9 @@ const State = {
 
 function todayStr() { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function firstOfMonth() { const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-01`; }
-function currentWeek() { const d=new Date(),day=d.getDay(),diff=d.getDate()-day+(day===0?-6:1),m=new Date(d.getFullYear(),d.getMonth(),diff); return `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}-${String(m.getDate()).padStart(2,'0')}`; }
-function weekLabel(wk) { if(!wk)return''; const d=new Date(wk+'T12:00:00'); return d.toLocaleDateString('en-US',{month:'short',day:'numeric'}); }
-function itemAgedays(item) { const ref=item.lastTouchedAt||item.createdAt; if(!ref)return 0; return Math.floor((Date.now()-new Date(ref).getTime())/86400000); }
-function daysUntil(dateStr) { if(!dateStr)return null; return Math.ceil((new Date(dateStr+'T12:00:00')-new Date(todayStr()+'T12:00:00'))/86400000); }
+function currentWeek() { return TempoPlanning.periodStart('week', todayStr()); }
+function itemAgedays(item) { return TempoPlanning.ageDays(item, new Date().toISOString()); }
+function daysUntil(dateStr) { return TempoPlanning.daysUntil(dateStr, todayStr()); }
 function dueDateChip(dateStr) {
   if(!dateStr)return'';
   const d=daysUntil(dateStr),label=new Date(dateStr+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
@@ -534,22 +558,6 @@ function dueDateChip(dateStr) {
   if(d===0) return `<span class="text-xs font-semibold text-red-600 bg-red-50 px-1.5 py-0.5 rounded-md border border-red-200">Due today</span>`;
   if(d<=7)  return `<span class="text-xs font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-200">${label}</span>`;
   return `<span class="text-xs text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded-md">${label}</span>`;
-}
-function itemSortScore(item) {
-  const d=daysUntil(item.dueDate);
-  if(d!==null&&d<0) return d-1000;   // overdue: most negative = top
-  if(item.urgent)   return -100;
-  if(d!==null&&d<=7)return d;         // due soon: 0-7
-  const pri={high:10,medium:20,low:30}[item.priority]||20;
-  return pri + (itemAgedays(item)>30?-1:0); // stale items within same priority group float up
-}
-function nextRecurDate(fromStr,freq) {
-  const d=new Date(fromStr+'T12:00:00');
-  if(freq==='daily')   d.setDate(d.getDate()+1);
-  else if(freq==='weekly')  d.setDate(d.getDate()+7);
-  else if(freq==='biweekly') d.setDate(d.getDate()+14);
-  else if(freq==='monthly') d.setMonth(d.getMonth()+1);
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 function fmtHours(h) { if(!h||h<0)return'0:00'; const hrs=Math.floor(h),min=Math.round((h-hrs)*60); return `${hrs}:${String(min).padStart(2,'0')}`; }
 function fmtSecs(s)  { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60; return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`; }
@@ -1345,33 +1353,55 @@ function renderClients() {
 //  VIEW: BACKLOG
 // ═══════════════════════════════════════════════
 
+// Board view settings — per-device conveniences (unit, which lanes are open).
+const _BOARD_KEY = 'tempo_v1_board';
+const BoardPrefs = {
+  get() { try { return JSON.parse(localStorage.getItem(_BOARD_KEY)) || {}; } catch { return {}; } },
+  set(patch) { try { localStorage.setItem(_BOARD_KEY, JSON.stringify({ ...this.get(), ...patch })); } catch {} },
+};
+
+function boardUnit() { const u = State.board.unit || BoardPrefs.get().unit; return TempoPlanning.UNITS.includes(u) ? u : 'week'; }
+function boardView() {
+  const unit = boardUnit();
+  return TempoPlanning.period(unit, TempoPlanning.periodStart(unit, State.board.anchor || todayStr()));
+}
+function setBoardUnit(u) { State.board.unit = u; State.board.anchor = null; BoardPrefs.set({ unit: u }); render(); }
+function shiftBoard(n) {
+  const v = boardView();
+  const start = TempoPlanning.shiftPeriod(v.unit, v.start, n);
+  State.board.anchor = TempoPlanning.contains(TempoPlanning.period(v.unit, start), todayStr()) ? null : start;
+  render();
+}
+function boardToday() { State.board.anchor = null; render(); }
+
+function laneIsOpen(lane) {
+  const saved = (BoardPrefs.get().open || {})[lane.key];
+  return saved !== undefined ? saved : (lane.counts.plan > 0 || lane.attention > 0);
+}
+function toggleLane(key, open) { BoardPrefs.set({ open: { ...(BoardPrefs.get().open || {}), [key]: open } }); render(); }
+function setAllLanes(open) {
+  const keys = [...document.querySelectorAll('[data-lane]')].map(el => el.dataset.lane);
+  BoardPrefs.set({ open: Object.fromEntries(keys.map(k => [k, open])) }); render();
+}
+
 function renderBacklog() {
   if(State.groomMode) return renderGroomMode();
+  const P = TempoPlanning;
+  const unit = boardUnit();
   const all = DB.backlog();
-  const active = all.filter(i => !i.archivedAt && canSeeBacklogItem(i));
-  const cw = currentWeek();
-  const backlogItems = active.filter(i => !i.weekOf);
-  const thisWeekItems = active.filter(i => i.weekOf === cw);
-  const staleCount = backlogItems.filter(i => itemAgedays(i) >= 30).length;
-  const priIcon = {high:'🔴',medium:'🟡',low:'🔵'};
-  const clients = DB.clients(true);
-  const clientMap = {};
-  clients.forEach(c => clientMap[c.id] = c);
-
-  // Needs Attention: overdue or urgent items (for top strip)
-  const needsAttention = backlogItems.filter(i => i.urgent || (i.dueDate && daysUntil(i.dueDate) < 0));
-  const needsAttnIds = new Set(needsAttention.map(i => i.id));
-  const regularItems = backlogItems.filter(i => !needsAttnIds.has(i.id));
-
-  // Group regular backlog by client, sort within groups
-  const byClient = {};
-  regularItems.forEach(item => {
-    const cid = item.clientId || '__none__';
-    if(!byClient[cid]) byClient[cid] = [];
-    byClient[cid].push(item);
+  const clients = DB.clients().filter(canSeeClient);
+  const board = P.buildBoard({
+    items: all.filter(canSeeBacklogItem), clients, projects: DB.projs(),
+    unit, anchor: State.board.anchor, today: todayStr(), nowIso: new Date().toISOString(), includeEmpty: true,
   });
-  Object.values(byClient).forEach(arr => arr.sort((a,b) => itemSortScore(a)-itemSortScore(b)));
-  const clientOrder = Object.keys(byClient).sort((a,b) => byClient[b].length - byClient[a].length);
+  const v = board.view;
+  const staleCount = all.filter(i => P.isActive(i) && !P.itemPlan(i) && P.ageDays(i, new Date().toISOString()) >= 30).length;
+  const archivedCount = all.filter(i => i.archivedAt).length;
+  const priIcon = {high:'🔴',medium:'🟡',low:'🔵'};
+  const unitShort = P.UNIT_NAME[unit];
+  const users = DB.users();
+  const fmtShort = (d) => new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const range = unit==='week' ? `${fmtShort(v.start)} – ${fmtShort(v.end)}` : v.label;
 
   function itemBadges(item) {
     const chips = [];
@@ -1386,121 +1416,126 @@ function renderBacklog() {
     }
     const dc = dueDateChip(item.dueDate);
     if(dc) chips.push(dc);
-    return chips.length ? `<div class="flex items-center gap-1.5 mt-1.5 flex-wrap">${chips.join('')}</div>` : '';
+    return chips;
   }
 
-  function backlogCard(item, highlight=false) {
-    const client = clientMap[item.clientId];
-    const proj = item.projectId ? DB.proj(item.projectId) : null;
-    const age = itemAgedays(item);
-    const stale = age >= 30;
-    const borderStyle = highlight ? 'border-amber-200 bg-amber-50/30' : 'border-gray-200 bg-white';
-    const assignee = item.assignedTo ? DB.users().find(u=>u.id===item.assignedTo) : null;
+  function card(c, column) {
+    const { item } = c;
+    const done = column === 'done';
     const canEdit = canEditBacklogItem(item);
-    const vBadge = visibilityBadge(item.visibility);
-    return `<div class="group relative ${borderStyle} border rounded-lg px-3 py-2.5 mb-2 hover:border-gray-300 hover:shadow-sm transition-all cursor-pointer" onclick="editBacklogItem('${item.id}')">
-      <div class="flex items-start gap-2">
-        <span class="text-xs mt-0.5 flex-shrink-0">${priIcon[item.priority]||'⚪'}</span>
-        <div class="min-w-0 flex-1 pr-24">
-          <div class="text-sm font-medium text-gray-800 leading-snug">${esc(item.title)}</div>
-          ${item.description?`<div class="text-xs text-gray-400 mt-0.5 line-clamp-1">${esc(item.description)}</div>`:''}
-          ${itemBadges(item)}
-          ${proj?`<div class="text-xs text-gray-400 mt-1">${esc(proj.name)}</div>`:''}
-          ${assignee?`<div class="text-xs text-indigo-400 mt-1">→ ${esc(assignee.name)}</div>`:''}
-          ${vBadge?`<div class="mt-1">${vBadge}</div>`:''}
-          ${!item.dueDate&&stale?`<div class="text-xs text-amber-500 mt-1">${age}d untouched</div>`:!item.dueDate&&age>14?`<div class="text-xs text-gray-300 mt-0.5">${age}d</div>`:''}
-        </div>
+    const assignee = item.assignedTo ? users.find(u=>u.id===item.assignedTo) : null;
+    const chips = done ? [] : itemBadges(item);
+    if(c.chip) chips.push(`<span class="text-xs text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded-md border border-sky-100" title="Planned for">📅 ${esc(c.chip)}</span>`);
+    if(c.carried) chips.push(`<span class="text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-200" title="Planned for an earlier period and still open">↪ carried</span>`);
+    if(done) chips.push(`<span class="text-xs text-green-700">✓ ${fmtShort(P.localDate(item.completedAt))}</span>`);
+    if(assignee) chips.push(`<span class="text-xs text-indigo-400">→ ${esc(assignee.name)}</span>`);
+    const vb = visibilityBadge(item.visibility); if(vb) chips.push(vb);
+    const btn = (col, label, title, cls) => `<button onclick="event.stopPropagation();moveBacklogItem('${item.id}','${col}')" title="${title}" class="text-xs px-1.5 py-0.5 rounded border font-medium whitespace-nowrap ${cls}">${label}</button>`;
+    const actions = !canEdit ? '' :
+      column==='backlog' ? btn('plan', `→ ${unitShort}`, `Plan for ${v.title.toLowerCase()}`, 'bg-teal-50 hover:bg-teal-100 text-teal-700 border-teal-100')
+      : column==='plan' ? btn('backlog','←','Back to backlog','bg-gray-50 hover:bg-gray-100 text-gray-500 border-gray-100') + btn('done','✓ Done','Mark done','bg-green-50 hover:bg-green-100 text-green-700 border-green-100')
+      : btn('plan','↺','Reopen into '+v.title.toLowerCase(),'bg-gray-50 hover:bg-gray-100 text-gray-500 border-gray-100');
+    return `<div class="bcard ${c.attention?'bcard-att':''} ${done?'bcard-done':''}" ${canEdit?`draggable="true" ondragstart="boardDragStart(event,'${item.id}')"`:''} onclick="editBacklogItem('${item.id}')">
+      <div class="flex items-start gap-1.5">
+        ${done?'':`<span class="text-xs mt-0.5 flex-shrink-0">${priIcon[item.priority]||'⚪'}</span>`}
+        <div class="text-sm ${done?'text-gray-500 line-through decoration-gray-300':'text-gray-800 font-medium'} leading-snug min-w-0 flex-1">${esc(item.title)}</div>
       </div>
-      <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-        <button onclick="event.stopPropagation();promoteToWeek('${item.id}')" title="Move to This Week" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-2 py-1 rounded font-medium whitespace-nowrap border border-teal-100">→ Week</button>
-      </div>
+      ${!done&&item.description?`<div class="text-xs text-gray-400 mt-0.5 line-clamp-1">${esc(item.description)}</div>`:''}
+      ${chips.length||actions?`<div class="flex items-end justify-between gap-2 mt-1.5"><div class="flex items-center gap-1.5 flex-wrap min-w-0">${chips.join('')}</div><div class="flex gap-1 flex-shrink-0">${actions}</div></div>`:''}
     </div>`;
   }
 
-  function weekCard(item) {
-    const client = clientMap[item.clientId];
-    const proj = item.projectId ? DB.proj(item.projectId) : null;
-    return `<div class="group relative bg-white border border-gray-200 rounded-lg px-3 py-2.5 mb-2 hover:border-gray-300 hover:shadow-sm transition-all cursor-pointer" onclick="editBacklogItem('${item.id}')">
-      <div class="flex items-start gap-2">
-        <span class="text-xs mt-0.5 flex-shrink-0">${priIcon[item.priority]||'⚪'}</span>
-        <div class="min-w-0 flex-1 pr-28">
-          <div class="text-sm font-medium text-gray-800 leading-snug">${esc(item.title)}</div>
-          ${item.description?`<div class="text-xs text-gray-400 mt-0.5 line-clamp-1">${esc(item.description)}</div>`:''}
-          ${itemBadges(item)}
-          ${client||proj?`<div class="text-xs text-gray-400 mt-1">${client?`<span style="color:${client.color||'#6366F1'}">●</span> ${esc(client.name)}`:''}${proj?` › ${esc(proj.name)}`:''}</div>`:''}
-        </div>
-      </div>
-      <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-        <button onclick="event.stopPropagation();markItemDone('${item.id}')" title="Mark done" class="text-xs bg-green-50 hover:bg-green-100 text-green-700 px-2 py-1 rounded font-medium border border-green-100">✓ Done</button>
-        <button onclick="event.stopPropagation();pullToBacklog('${item.id}')" title="Send back to backlog" class="text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-1.5 py-1 rounded border border-gray-100">← </button>
-      </div>
-    </div>`;
-  }
+  const cell = (cards, column) => `<div class="bcell" data-col="${column}" ondragover="boardDragOver(event)" ondragleave="this.classList.remove('bcell-over')" ondrop="boardDrop(event,'${column}')">${cards.map(c=>card(c,column)).join('')}</div>`;
+  const count = (n, cls='') => `<span class="text-xs tabular-nums ${n?cls||'text-gray-500':'text-gray-300'}">${n}</span>`;
 
-  const wLabel = weekLabel(cw);
-  const archivedCount = all.filter(i => i.archivedAt).length;
+  function lane(l) {
+    const open = laneIsOpen(l);
+    const name = l.client ? clientDisplayName(l.client) : l.name;
+    const head = `<div class="blane-head" data-lane="${l.key}" onclick="toggleLane('${l.key}',${!open})">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="text-gray-400 text-xs w-3">${open?'▾':'▸'}</span>
+        <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background:${l.color||'#9CA3AF'}"></span>
+        <span class="text-sm font-semibold ${l.total?'text-gray-700':'text-gray-400'} truncate">${esc(name)}</span>
+        ${l.attention?`<span class="text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-full px-1.5" title="Urgent or overdue">⚠ ${l.attention}</span>`:''}
+        <span class="ml-auto pr-1">${count(l.counts.backlog)}</span>
+      </div>
+      <div class="pl-1">${count(l.counts.plan,'text-teal-700 font-semibold')}</div>
+      <div class="pl-1">${count(l.counts.done,'text-green-700')}</div>
+    </div>`;
+    if(!open) return `<div class="blane">${head}</div>`;
+    const subs = l.subs.map(s => {
+      const clientId = l.client ? l.client.id : '';
+      const projectId = s.project ? s.project.id : '';
+      const empty = !(s.counts.backlog + s.counts.plan + s.counts.done);
+      return `<div class="bsub ${empty?'bsub-empty':''}">
+        <div class="bsub-head">
+          <span class="text-xs font-medium ${s.project?'text-gray-500':'text-gray-400 italic'}">${esc(s.name)}</span>
+          <button onclick="showBacklogModal(null,{clientId:'${clientId}',projectId:'${projectId}'})" class="text-xs text-gray-300 hover:text-teal-600 px-1" title="Add item to ${esc(s.name)}">+</button>
+        </div>
+        ${empty?'':`<div class="bgrid">${cell(s.cells.backlog,'backlog')}${cell(s.cells.plan,'plan')}${cell(s.cells.done,'done')}</div>`}
+      </div>`;
+    }).join('');
+    return `<div class="blane">${head}${subs || `<div class="text-xs text-gray-300 italic px-3 py-2">No projects</div>`}</div>`;
+  }
 
   return `
-    <div class="flex items-center justify-between mb-5 no-print">
-      <div class="flex items-center gap-3">
-        <span class="text-sm text-gray-400">${backlogItems.length} in backlog${thisWeekItems.length?` · ${thisWeekItems.length} this week`:''}</span>
-        ${staleCount>0
-          ?`<button onclick="State.groomMode=true;render()" class="flex items-center gap-1.5 text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 px-3 py-1.5 rounded-lg border border-amber-200 font-medium transition-colors">🧹 Groom <span class="bg-amber-200 text-amber-800 rounded-full px-1.5">${staleCount} stale</span></button>`
-          :`<button onclick="State.groomMode=true;render()" class="text-xs text-gray-400 hover:text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors">🧹 Groom backlog</button>`}
+    <div class="flex items-center justify-between flex-wrap gap-3 mb-4 no-print">
+      <div class="flex items-center gap-2 flex-wrap">
+        <div class="seg">${P.UNITS.map(u=>`<button onclick="setBoardUnit('${u}')" class="${u===unit?'on':''}">${P.UNIT_NAME[u]}</button>`).join('')}</div>
+        <div class="flex items-center gap-1">
+          <button onclick="shiftBoard(-1)" class="btn-secondary w-7 h-7 rounded-lg text-sm" title="Previous ${unit}">‹</button>
+          <button onclick="boardToday()" class="btn-secondary px-2.5 h-7 rounded-lg text-xs ${v.isCurrent?'text-gray-400':''}" ${v.isCurrent?'disabled':''}>Today</button>
+          <button onclick="shiftBoard(1)" class="btn-secondary w-7 h-7 rounded-lg text-sm" title="Next ${unit}">›</button>
+        </div>
+        <span class="text-sm font-semibold text-gray-700 ml-1">${esc(v.title)}</span>
+        <span class="text-xs text-gray-400">${esc(range)}</span>
       </div>
-      ${archivedCount>0?`<button onclick="showArchive()" class="text-xs text-gray-400 hover:text-gray-600 hover:underline">Archive (${archivedCount}) ↗</button>`:''}
+      <div class="flex items-center gap-3 flex-wrap">
+        ${board.attention?`<span class="text-xs font-semibold text-red-600">⚠ ${board.attention} need attention</span>`:''}
+        ${board.later?`<span class="text-xs text-gray-400" title="Open items planned for periods after this one">${board.later} planned later</span>`:''}
+        <button onclick="setAllLanes(true)" class="text-xs text-gray-400 hover:text-gray-600 hover:underline">Expand all</button>
+        <button onclick="setAllLanes(false)" class="text-xs text-gray-400 hover:text-gray-600 hover:underline">Collapse all</button>
+        <button onclick="State.groomMode=true;render()" class="text-xs ${staleCount?'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 font-medium':'text-gray-400 hover:text-gray-600 hover:bg-gray-100'} px-2.5 py-1 rounded-lg">🧹 Groom${staleCount?` · ${staleCount} stale`:''}</button>
+        ${archivedCount?`<button onclick="showArchive()" class="text-xs text-gray-400 hover:text-gray-600 hover:underline">Archive (${archivedCount})</button>`:''}
+      </div>
     </div>
-    <div class="flex gap-6" style="align-items:start">
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center justify-between mb-3">
-          <div class="flex items-center gap-2">
-            <span class="text-xs font-bold text-gray-500 uppercase tracking-wider">Backlog</span>
-            <span class="text-xs text-gray-400">${backlogItems.length}</span>
-          </div>
-          <button onclick="showBacklogModal()" class="text-xs text-teal-600 hover:text-teal-800 font-medium">+ Add</button>
+    <div class="board">
+      <div class="board-inner">
+        <div class="bgrid bcols">
+          <div class="flex items-center gap-2"><span class="bcol-title">Backlog</span>${count(board.totals.backlog)}<button onclick="showBacklogModal()" class="text-xs text-teal-600 hover:text-teal-800 font-medium ml-1">+ Add</button></div>
+          <div class="flex items-center gap-2"><span class="bcol-title text-teal-700">${esc(v.title)}</span>${count(board.totals.plan,'text-teal-700 font-semibold')}</div>
+          <div class="flex items-center gap-2"><span class="bcol-title text-green-700">Done</span>${count(board.totals.done,'text-green-700')}</div>
         </div>
-        ${backlogItems.length===0
-          ?`<div class="text-center text-gray-300 text-sm py-16 border-2 border-dashed border-gray-100 rounded-xl">Backlog is clear</div>`
-          :`${needsAttention.length>0?`
-            <div class="mb-5">
-              <div class="flex items-center gap-1.5 mb-2 pb-1 border-b border-red-100">
-                <span class="text-xs font-bold text-red-500 uppercase tracking-wider">Needs Attention</span>
-                <span class="text-xs text-red-300">${needsAttention.length}</span>
-              </div>
-              ${needsAttention.sort((a,b)=>itemSortScore(a)-itemSortScore(b)).map(i=>backlogCard(i,true)).join('')}
-            </div>`:''
-          }${clientOrder.length>0?clientOrder.map(cid=>{
-            const client = clientMap[cid];
-            const items = byClient[cid];
-            if(!items||!items.length) return '';
-            return `<div class="mb-5">
-              <div class="flex items-center gap-1.5 mb-2 pb-1 border-b border-gray-100">
-                ${client?`<span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${client.color||'#6366F1'}"></span><span class="text-xs font-semibold text-gray-500">${esc(client.name)}</span>`:'<span class="text-xs font-semibold text-gray-400">No client</span>'}
-                <span class="text-xs text-gray-300 ml-1">${items.length}</span>
-              </div>
-              ${items.map(i=>backlogCard(i)).join('')}
-            </div>`;
-          }).join(''):''}`
-        }
-      </div>
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center gap-2 mb-3">
-          <span class="text-xs font-bold text-gray-500 uppercase tracking-wider">This Week</span>
-          <span class="text-xs text-gray-400">${thisWeekItems.length}</span>
-          ${thisWeekItems.length>0?`<span class="text-xs text-gray-300">· ${wLabel}</span>`:''}
-        </div>
-        ${thisWeekItems.length===0
-          ?`<div class="text-center text-gray-300 text-sm py-16 border-2 border-dashed border-gray-100 rounded-xl">Pull items from backlog →</div>`
-          :thisWeekItems.map(weekCard).join('')
-        }
+        ${board.lanes.map(lane).join('')}
       </div>
     </div>`;
+}
+
+// ── Board moves (drag/drop + buttons) — rules live in TempoPlanning ─────────
+function moveBacklogItem(id, column) {
+  const all = DB.backlog(), i = all.findIndex(x => x.id === id);
+  if(i < 0) return;
+  if(!canEditBacklogItem(all[i])) { toast('Only the creator can move this item', 'err'); return; }
+  const view = boardView();
+  const { item, next } = TempoPlanning.moveItem(all[i], column, view, new Date().toISOString(), uid());
+  all[i] = item;
+  if(next) all.push(next);
+  DB.saveBack(all); render();
+  const title = TempoPlanning.periodTitle(view.unit, view.start, todayStr());
+  toast(column==='done' ? (next ? 'Done ✓ — next occurrence added to backlog' : 'Done ✓') : column==='plan' ? `Planned for ${title.toLowerCase()} ✓` : 'Moved to backlog');
+}
+function boardDragStart(e, id) { e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; }
+function boardDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('bcell-over'); }
+function boardDrop(e, column) {
+  e.preventDefault(); e.currentTarget.classList.remove('bcell-over');
+  const id = e.dataTransfer.getData('text/plain');
+  if(id) moveBacklogItem(id, column);
 }
 
 function renderGroomMode() {
   const all = DB.backlog();
   const items = all
-    .filter(i => !i.archivedAt && !i.weekOf)
+    .filter(i => TempoPlanning.isActive(i) && !TempoPlanning.itemPlan(i))
     .sort((a,b) => new Date(a.lastTouchedAt||a.createdAt||0) - new Date(b.lastTouchedAt||b.createdAt||0));
   const clients = DB.clients(true);
   const clientMap = {};
@@ -2071,11 +2106,20 @@ function saveEditProject(id) {
 //  MODAL: BACKLOG ITEM
 // ═══════════════════════════════════════════════
 
-function showBacklogModal(id=null) {
+function showBacklogModal(id=null, prefill=null) {
   const item=id?DB.backlog().find(x=>x.id===id):null;
+  const pre=item||prefill||{};
   const selPr=(v)=>(item?.priority||'medium')===v?'selected':'';
   const selRf=(v)=>(item?.recurFrequency||'weekly')===v?'selected':'';
-  const inThisWeek = item?.weekOf === currentWeek();
+  const view = boardView();
+  const viewTitle = TempoPlanning.periodTitle(view.unit, view.start, todayStr());
+  const where = item ? (() => {
+    const col = TempoPlanning.classify(item, view, todayStr()).column;
+    const plan = TempoPlanning.itemPlan(item);
+    if(TempoPlanning.isDone(item)) return { col:'done', text:`✓ Done ${TempoPlanning.localDate(item.completedAt)}` };
+    if(!TempoPlanning.isActive(item)) return { col:null, text:'🗃 Archived' };
+    return { col, text: plan ? `📅 Planned: ${TempoPlanning.planChip(plan, todayStr())}` : '📋 Backlog' };
+  })() : null;
   const blVis = item?.visibility||'public';
   const myId = activeViewer();
   const usersForAssign = DB.users();
@@ -2087,14 +2131,14 @@ function showBacklogModal(id=null) {
       <div><label>Description <span class="text-gray-400 font-normal">(optional)</span></label><textarea id="bl_desc" rows="2" placeholder="More detail…">${esc(item?.description||'')}</textarea></div>
       <div style="position:relative">
         <label>Client <span class="text-gray-400 font-normal">(optional)</span></label>
-        <input type="text" id="bl_client_txt" placeholder="Search or type new client name…" oninput="blClientInput(this.value)" onfocus="blClientInput(this.value)" onblur="setTimeout(()=>{const d=document.getElementById('bl_client_dd');if(d)d.style.display='none';},160)" autocomplete="off" value="${esc(DB.client(item?.clientId||null)?.name||'')}">
-        <input type="hidden" id="bl_client" value="${item?.clientId||''}">
+        <input type="text" id="bl_client_txt" placeholder="Search or type new client name…" oninput="blClientInput(this.value)" onfocus="blClientInput(this.value)" onblur="setTimeout(()=>{const d=document.getElementById('bl_client_dd');if(d)d.style.display='none';},160)" autocomplete="off" value="${esc(DB.client(pre.clientId||null)?.name||'')}">
+        <input type="hidden" id="bl_client" value="${pre.clientId||''}">
         <div id="bl_client_dd" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:1px solid #D1D5DB;border-radius:0.4rem;z-index:50;max-height:160px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px"></div>
       </div>
       <div style="position:relative">
         <label>Project / Category <span class="text-gray-400 font-normal">(optional)</span></label>
-        <input type="text" id="bl_proj_txt" placeholder="Search or type new project / category…" oninput="blProjInput(this.value)" onfocus="blProjInput(this.value)" onblur="setTimeout(()=>{const d=document.getElementById('bl_proj_dd');if(d)d.style.display='none';},160)" autocomplete="off" value="${esc(DB.proj(item?.projectId||null)?.name||'')}">
-        <input type="hidden" id="bl_proj" value="${item?.projectId||''}">
+        <input type="text" id="bl_proj_txt" placeholder="Search or type new project / category…" oninput="blProjInput(this.value)" onfocus="blProjInput(this.value)" onblur="setTimeout(()=>{const d=document.getElementById('bl_proj_dd');if(d)d.style.display='none';},160)" autocomplete="off" value="${esc(DB.proj(pre.projectId||null)?.name||'')}">
+        <input type="hidden" id="bl_proj" value="${pre.projectId||''}">
         <div id="bl_proj_dd" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:1px solid #D1D5DB;border-radius:0.4rem;z-index:50;max-height:160px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:2px"></div>
       </div>
       <div class="grid grid-cols-3 gap-3">
@@ -2144,11 +2188,12 @@ function showBacklogModal(id=null) {
       </div>
       ${item?`
       <div class="flex items-center justify-between pt-1 pb-1">
-        <span class="text-xs text-gray-400">Currently in: ${inThisWeek?'📌 This Week':'📋 Backlog'}</span>
-        ${inThisWeek
-          ?`<button onclick="pullToBacklog('${item.id}');closeModal()" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg font-medium">← Move to Backlog</button>`
-          :`<button onclick="promoteToWeek('${item.id}');closeModal()" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-medium border border-teal-100">→ Move to This Week</button>`
-        }
+        <span class="text-xs text-gray-400">${where.text}</span>
+        <div class="flex gap-2">
+          ${where.col!=='backlog'?`<button onclick="closeModal();moveBacklogItem('${item.id}','backlog')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg font-medium">← Backlog</button>`:''}
+          ${where.col!=='plan'?`<button onclick="closeModal();moveBacklogItem('${item.id}','plan')" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-medium border border-teal-100">→ ${esc(viewTitle)}</button>`:''}
+          ${where.col!=='done'?`<button onclick="closeModal();moveBacklogItem('${item.id}','done')" class="text-xs bg-green-50 hover:bg-green-100 text-green-700 px-3 py-1.5 rounded-lg font-medium border border-green-100">✓ Done</button>`:''}
+        </div>
       </div>`:''}
       <div class="flex justify-between items-center pt-2 border-t border-gray-100">
         ${item?`<button onclick="delBacklogItem('${item.id}')" class="text-red-500 text-sm hover:underline">Delete</button>`:'<span></span>'}
@@ -2203,38 +2248,13 @@ function saveBacklogItem(id){
     const i=all.findIndex(x=>x.id===id);
     if(i>=0) all[i]={...all[i],title,description:desc,priority,effort,dueDate,urgent,recurring,recurFrequency,clientId,projectId:projId,visibility,assignedTo,lastTouchedAt:now};
   } else {
-    all.push({id:uid(),title,description:desc,priority,effort,dueDate,urgent,recurring,recurFrequency,clientId,projectId:projId,weekOf:null,archivedAt:null,visibility,assignedTo,createdBy:myId,createdAt:now,lastTouchedAt:now});
+    all.push({id:uid(),title,description:desc,priority,effort,dueDate,urgent,recurring,recurFrequency,clientId,projectId:projId,weekOf:null,planUnit:null,planStart:null,archivedAt:null,visibility,assignedTo,createdBy:myId,createdAt:now,lastTouchedAt:now});
   }
   DB.saveBack(all);
   closeModal();render();toast(id?'Item updated ✓':'Added to backlog ✓');
 }
 function delBacklogItem(id){if(!confirm('Delete this item?'))return;DB.saveBack(DB.backlog().filter(x=>x.id!==id));render();toast('Item deleted');}
 function delBacklogItemSilent(id){DB.saveBack(DB.backlog().filter(x=>x.id!==id));render();}
-function promoteToWeek(id){
-  const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
-  if(i<0)return;
-  all[i]={...all[i],weekOf:currentWeek(),lastTouchedAt:new Date().toISOString()};
-  DB.saveBack(all);render();toast('Moved to This Week ✓');
-}
-function pullToBacklog(id){
-  const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
-  if(i<0)return;
-  all[i]={...all[i],weekOf:null,lastTouchedAt:new Date().toISOString()};
-  DB.saveBack(all);render();
-}
-function markItemDone(id){
-  const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
-  if(i<0)return;
-  const now=new Date().toISOString();
-  const item=all[i];
-  all[i]={...item,archivedAt:now,completedAt:now};
-  if(item.recurring&&item.recurFrequency){
-    // Respawn a fresh copy for the next cycle
-    const nextDue = item.dueDate ? nextRecurDate(item.dueDate,item.recurFrequency) : null;
-    all.push({...item,id:uid(),weekOf:null,archivedAt:null,completedAt:null,dueDate:nextDue,createdAt:now,lastTouchedAt:now});
-  }
-  DB.saveBack(all);render();toast(item.recurring?'Done ✓ — next occurrence added to backlog':'Done ✓');
-}
 function archiveItem(id){
   const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
   if(i<0)return;
@@ -2272,7 +2292,7 @@ function showArchive(){
 function restoreItem(id){
   const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
   if(i<0)return;
-  all[i]={...all[i],archivedAt:null,completedAt:null,weekOf:null};
+  all[i]=TempoPlanning.reopenItem(all[i],new Date().toISOString(),null);
   DB.saveBack(all);closeModal();render();toast('Item restored ✓');
 }
 
