@@ -82,7 +82,7 @@ const sugg = P.timeSuggestions({
   ],
   clientId: 'c1', today, nowIso: now,
 });
-assert.deepEqual(sugg.map((s) => s.item.id), ['s2', 's1', 's3']);
+assert.deepEqual(sugg.map((s) => s.item.id), ['s2', 's1']); // done/shelved never offered
 assert.deepEqual(P.timeSuggestions({ items: [{ id: 'a', title: 'Alpha', clientId: 'c1', archivedAt: null }], clientId: 'c1', query: 'LPH', today, nowIso: now }).length, 1);
 
 console.log('planning core: all tests pass');

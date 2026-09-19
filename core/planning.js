@@ -272,20 +272,18 @@
   }
 
   /**
-   * Backlog items to offer when logging time for a client: open items plus
-   * those completed this week, filtered by project (if chosen) and by a
-   * title substring. Ranked: this week's plan (incl. carried), then backlog
-   * by urgency, then recently done.
+   * Backlog items to offer when logging time for a client: open items only,
+   * filtered by project (if chosen) and by a title substring. Ranked: this
+   * week's plan (incl. carried), then backlog by urgency.
    */
   function timeSuggestions({ items, clientId, projectId, query, today, nowIso, limit = 8 }) {
     const week = period('week', periodStart('week', today));
     const q = (query || '').trim().toLowerCase();
-    const rank = { plan: 0, backlog: 1, done: 2 };
+    const rank = { plan: 0, backlog: 1 };
     return items
-      .filter((i) => i.clientId === clientId && (!projectId || i.projectId === projectId))
+      .filter((i) => isActive(i) && i.clientId === clientId && (!projectId || i.projectId === projectId))
       .filter((i) => !q || String(i.title).toLowerCase().includes(q))
-      .map((i) => ({ item: i, column: classify(i, week, today).column || (isActive(i) ? 'backlog' : null) }))
-      .filter((s) => s.column)
+      .map((i) => ({ item: i, column: classify(i, week, today).column === 'plan' ? 'plan' : 'backlog' }))
       .sort((a, b) => rank[a.column] - rank[b.column] || sortScore(a.item, today, nowIso) - sortScore(b.item, today, nowIso))
       .slice(0, limit);
   }

@@ -82,6 +82,10 @@
     .dash-dd-head { font-size: 0.7rem; color: #9CA3AF; padding: 6px 12px 4px; border-bottom: 1px solid #F3F4F6; }
     .dash-dd-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid #F9FAFB; }
     .dash-dd-row:hover { background: #F0FDFA; }
+    input.dash-linked { border-color: #5EEAD4; background: #F0FDFA; padding-right: 4.2rem; }
+    .dash-done { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); font-size: 0.7rem; font-weight: 600; padding: 2px 7px; border-radius: 9999px; border: 1px solid #D1D5DB; background: white; color: #6B7280; white-space: nowrap; }
+    .dash-done:hover { border-color: #16A34A; color: #15803D; }
+    .dash-done[data-on="1"] { background: #16A34A; border-color: #16A34A; color: white; }
     .seg { display: inline-flex; background: #F3F4F6; border-radius: 0.5rem; padding: 2px; }
     .seg button { font-size: 0.75rem; padding: 3px 10px; border-radius: 0.4rem; color: #6B7280; }
     .seg button.on { background: white; color: #111827; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
@@ -999,6 +1003,7 @@ function renderDashClientRow(client, allTime, allExp, monthStart) {
             onblur="setTimeout(()=>{const d=document.getElementById('${key}_dd');if(d)d.style.display='none';},160)"
             onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('${key}_note')?.focus();}">
           <input type="hidden" id="${key}_bl" value="">
+          <button type="button" id="${key}_done" class="dash-done hidden" data-on="" onclick="dashToggleDone('${key}')" title="Also mark this backlog item done when logging">✓ done?</button>
           <div id="${key}_dd" class="dash-dd" style="display:none"></div>
         </div>
 
@@ -1083,7 +1088,7 @@ function dashTaskInput(key, clientId) {
   if(!whatEl || !dd) return;
   // Typing away from a picked item's title unlinks it
   const linked = link.value && DB.backlog().find(b => b.id === link.value);
-  if(linked && whatEl.value !== linked.title) link.value = '';
+  if(linked && whatEl.value !== linked.title) dashSetLinked(key, null);
   if(type !== 'time') { dd.style.display = 'none'; return; }
   const matches = TempoPlanning.timeSuggestions({
     items: DB.backlog().filter(canSeeBacklogItem), clientId,
@@ -1092,7 +1097,7 @@ function dashTaskInput(key, clientId) {
   });
   if(!matches.length) { dd.style.display = 'none'; return; }
   window._dashTaskMatches = matches;
-  const tag = { plan:'<span class="text-teal-600">this week</span>', backlog:'<span class="text-gray-400">backlog</span>', done:'<span class="text-green-600">✓ done</span>' };
+  const tag = { plan:'<span class="text-teal-600">this week</span>', backlog:'<span class="text-gray-400">backlog</span>' };
   dd.innerHTML = `<div class="dash-dd-head">Log against a backlog item — or just type</div>` + matches.map((m,i) => {
     const proj = m.item.projectId ? DB.proj(m.item.projectId) : null;
     return `<div class="dash-dd-row" onmousedown="dashTaskPick('${key}',${i})">
@@ -1106,11 +1111,27 @@ function dashTaskPick(key, idx) {
   const m = (window._dashTaskMatches || [])[idx];
   if(!m) return;
   document.getElementById(`${key}_what`).value = m.item.title;
-  document.getElementById(`${key}_bl`).value = m.item.id;
+  dashSetLinked(key, m.item);
   const projSel = document.getElementById(`${key}_proj`);
   if(projSel && !projSel.value && m.item.projectId && [...projSel.options].some(o => o.value === m.item.projectId)) projSel.value = m.item.projectId;
   document.getElementById(`${key}_dd`).style.display = 'none';
   document.getElementById(`${key}_note`)?.focus();
+}
+
+// Linked state: teal field + the "✓ done?" toggle (only offered if you may edit the item)
+function dashSetLinked(key, item) {
+  const whatEl = document.getElementById(`${key}_what`), link = document.getElementById(`${key}_bl`), btn = document.getElementById(`${key}_done`);
+  link.value = item ? item.id : '';
+  whatEl.classList.toggle('dash-linked', !!item);
+  whatEl.title = item ? 'Linked to backlog item' : '';
+  btn.dataset.on = '';
+  btn.textContent = '✓ done?';
+  btn.classList.toggle('hidden', !(item && canEditBacklogItem(item)));
+}
+function dashToggleDone(key) {
+  const btn = document.getElementById(`${key}_done`);
+  btn.dataset.on = btn.dataset.on ? '' : '1';
+  btn.textContent = btn.dataset.on ? '✓ done' : '✓ done?';
 }
 
 function onDashProjChange(key, clientId) {
@@ -1133,8 +1154,11 @@ function submitClientLog(clientId) {
     const hours=parseFloat(amt);
     if(!hours||hours<=0){toast('Enter hours','err');return;}
     const backlogItemId=document.getElementById(`${key}_bl`)?.value||null;
+    const markDone=!!(backlogItemId && document.getElementById(`${key}_done`)?.dataset.on);
     DB.addTime({userId,clientId,projectId:projId,date,hours,notes,backlogItemId,billable:true,visibility:'public',createdAt:new Date().toISOString()});
-    toast(backlogItemId?'Time logged against backlog item ✓':'Time logged ✓');
+    const moved=markDone ? moveBacklogItem(backlogItemId,'done',true) : null;
+    if(moved) toast(moved.next ? 'Time logged · done ✓ — next occurrence added' : 'Time logged · item marked done ✓');
+    else if(!markDone) toast(backlogItemId?'Time logged against backlog item ✓':'Time logged ✓');
   } else if(type==='expense') {
     const amount=parseFloat(amt);
     if(!amount||amount<=0){toast('Enter an amount','err');return;}
@@ -1609,17 +1633,20 @@ function renderBacklog() {
 }
 
 // ── Board moves (drag/drop + buttons) — rules live in TempoPlanning ─────────
-function moveBacklogItem(id, column) {
+/** Returns { item, next } on success, null if not allowed. `quiet` skips the toast. */
+function moveBacklogItem(id, column, quiet=false) {
   const all = DB.backlog(), i = all.findIndex(x => x.id === id);
-  if(i < 0) return;
-  if(!canEditBacklogItem(all[i])) { toast('Only the creator can move this item', 'err'); return; }
+  if(i < 0) return null;
+  if(!canEditBacklogItem(all[i])) { toast('Only the creator can move this item', 'err'); return null; }
   const view = boardView();
   const { item, next } = TempoPlanning.moveItem(all[i], column, view, new Date().toISOString(), uid());
   all[i] = item;
   if(next) all.push(next);
   DB.saveBack(all); render();
+  if(quiet) return { item, next };
   const title = TempoPlanning.periodTitle(view.unit, view.start, todayStr());
   toast(column==='done' ? (next ? 'Done ✓ — next occurrence added to backlog' : 'Done ✓') : column==='plan' ? `Planned for ${title.toLowerCase()} ✓` : 'Moved to backlog');
+  return { item, next };
 }
 function boardDragStart(e, id) { e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; }
 function boardDragOver(e) { e.preventDefault(); e.currentTarget.classList.add('bcell-over'); }
