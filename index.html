@@ -2253,7 +2253,7 @@ function saveBacklogItem(id){
   DB.saveBack(all);
   closeModal();render();toast(id?'Item updated ✓':'Added to backlog ✓');
 }
-function delBacklogItem(id){if(!confirm('Delete this item?'))return;DB.saveBack(DB.backlog().filter(x=>x.id!==id));render();toast('Item deleted');}
+function delBacklogItem(id){if(!confirm('Delete this item?'))return;DB.saveBack(DB.backlog().filter(x=>x.id!==id));closeModal();render();toast('Item deleted');}
 function delBacklogItemSilent(id){DB.saveBack(DB.backlog().filter(x=>x.id!==id));render();}
 function archiveItem(id){
   const all=DB.backlog(),i=all.findIndex(x=>x.id===id);
