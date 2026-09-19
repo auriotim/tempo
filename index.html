@@ -78,6 +78,10 @@
     .bcard[draggable="true"] { cursor: grab; }
     .bcard-att { border-color: #FCD34D; background: #FFFBEB; }
     .bcard-done { background: transparent; border-color: #EEF0F2; }
+    .dash-dd { position: absolute; top: 100%; left: 0; min-width: 340px; background: white; border: 1px solid #D1D5DB; border-radius: 0.4rem; z-index: 50; max-height: 260px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 2px; }
+    .dash-dd-head { font-size: 0.7rem; color: #9CA3AF; padding: 6px 12px 4px; border-bottom: 1px solid #F3F4F6; }
+    .dash-dd-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid #F9FAFB; }
+    .dash-dd-row:hover { background: #F0FDFA; }
     .seg { display: inline-flex; background: #F3F4F6; border-radius: 0.5rem; padding: 2px; }
     .seg button { font-size: 0.75rem; padding: 3px 10px; border-radius: 0.4rem; color: #6B7280; }
     .seg button.on { background: white; color: #111827; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
@@ -989,8 +993,14 @@ function renderDashClientRow(client, allTime, allExp, monthStart) {
 
         <select id="${key}_proj" onchange="onDashProjChange('${key}','${client.id}')" class="py-1.5 text-sm">${pSel}</select>
 
-        <input type="text" id="${key}_what" placeholder="task or item" class="py-1.5 text-sm"
-          onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('${key}_note')?.focus();}">
+        <div class="relative">
+          <input type="text" id="${key}_what" placeholder="task or item" class="py-1.5 text-sm" autocomplete="off"
+            oninput="dashTaskInput('${key}','${client.id}')" onfocus="dashTaskInput('${key}','${client.id}')"
+            onblur="setTimeout(()=>{const d=document.getElementById('${key}_dd');if(d)d.style.display='none';},160)"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('${key}_note')?.focus();}">
+          <input type="hidden" id="${key}_bl" value="">
+          <div id="${key}_dd" class="dash-dd" style="display:none"></div>
+        </div>
 
         <input type="text" id="${key}_note" placeholder="note or detail…" class="py-1.5 text-sm">
 
@@ -1066,6 +1076,43 @@ function onLogTypeChange(key) {
   else                    { amtEl.value=''; amtEl.placeholder='N/A'; amtEl.disabled=true; amtEl.style.paddingLeft='0.55rem'; pfxEl?.classList.add('hidden'); if(whatEl)whatEl.placeholder='item title (required)'; }
 }
 
+// Task field: offer this client's backlog items; picking one links the time entry.
+function dashTaskInput(key, clientId) {
+  const type = document.getElementById(`${key}_type`)?.value;
+  const whatEl = document.getElementById(`${key}_what`), dd = document.getElementById(`${key}_dd`), link = document.getElementById(`${key}_bl`);
+  if(!whatEl || !dd) return;
+  // Typing away from a picked item's title unlinks it
+  const linked = link.value && DB.backlog().find(b => b.id === link.value);
+  if(linked && whatEl.value !== linked.title) link.value = '';
+  if(type !== 'time') { dd.style.display = 'none'; return; }
+  const matches = TempoPlanning.timeSuggestions({
+    items: DB.backlog().filter(canSeeBacklogItem), clientId,
+    projectId: document.getElementById(`${key}_proj`)?.value || null,
+    query: link.value ? '' : whatEl.value, today: todayStr(), nowIso: new Date().toISOString(),
+  });
+  if(!matches.length) { dd.style.display = 'none'; return; }
+  window._dashTaskMatches = matches;
+  const tag = { plan:'<span class="text-teal-600">this week</span>', backlog:'<span class="text-gray-400">backlog</span>', done:'<span class="text-green-600">✓ done</span>' };
+  dd.innerHTML = `<div class="dash-dd-head">Log against a backlog item — or just type</div>` + matches.map((m,i) => {
+    const proj = m.item.projectId ? DB.proj(m.item.projectId) : null;
+    return `<div class="dash-dd-row" onmousedown="dashTaskPick('${key}',${i})">
+      <span class="truncate">${esc(m.item.title)}</span>
+      <span class="text-xs ml-auto flex-shrink-0 flex gap-1.5">${proj?`<span class="text-gray-400">${esc(proj.name)}</span>`:''}${tag[m.column]}</span>
+    </div>`;
+  }).join('');
+  dd.style.display = 'block';
+}
+function dashTaskPick(key, idx) {
+  const m = (window._dashTaskMatches || [])[idx];
+  if(!m) return;
+  document.getElementById(`${key}_what`).value = m.item.title;
+  document.getElementById(`${key}_bl`).value = m.item.id;
+  const projSel = document.getElementById(`${key}_proj`);
+  if(projSel && !projSel.value && m.item.projectId && [...projSel.options].some(o => o.value === m.item.projectId)) projSel.value = m.item.projectId;
+  document.getElementById(`${key}_dd`).style.display = 'none';
+  document.getElementById(`${key}_note`)?.focus();
+}
+
 function onDashProjChange(key, clientId) {
   const sel=document.getElementById(`${key}_proj`);
   if(sel?.value==='__new__') { sel.value=''; showAddProjectModal(clientId, key); }
@@ -1085,8 +1132,9 @@ function submitClientLog(clientId) {
   if(type==='time') {
     const hours=parseFloat(amt);
     if(!hours||hours<=0){toast('Enter hours','err');return;}
-    DB.addTime({userId,clientId,projectId:projId,date,hours,notes,billable:true,visibility:'public',createdAt:new Date().toISOString()});
-    toast('Time logged ✓');
+    const backlogItemId=document.getElementById(`${key}_bl`)?.value||null;
+    DB.addTime({userId,clientId,projectId:projId,date,hours,notes,backlogItemId,billable:true,visibility:'public',createdAt:new Date().toISOString()});
+    toast(backlogItemId?'Time logged against backlog item ✓':'Time logged ✓');
   } else if(type==='expense') {
     const amount=parseFloat(amt);
     if(!amount||amount<=0){toast('Enter an amount','err');return;}
@@ -1100,7 +1148,7 @@ function submitClientLog(clientId) {
     DB.saveBack(bl);
     toast('Backlog item added ✓');
   }
-  ['_amt','_what','_note'].forEach(s=>{ const el=document.getElementById(`${key}${s}`); if(el){el.value='';el.disabled=false;} });
+  ['_amt','_what','_note','_bl'].forEach(s=>{ const el=document.getElementById(`${key}${s}`); if(el){el.value='';el.disabled=false;} });
   onLogTypeChange(key);
   render();
 }
@@ -1404,6 +1452,8 @@ function renderBacklog() {
     unit, anchor: State.board.anchor, today: todayStr(), nowIso: new Date().toISOString(), includeEmpty: true,
   });
   const v = board.view;
+  const hours = P.hoursByItem(DB.time());
+  const hrsChip = (id, cls='') => hours[id] ? `<span class="text-xs text-gray-500 ${cls}" title="Time logged against this item">⏱ ${fmtHours(hours[id])}</span>` : '';
   const staleCount = all.filter(i => P.isActive(i) && !P.itemPlan(i) && P.ageDays(i, new Date().toISOString()) >= 30).length;
   const archivedCount = all.filter(i => i.archivedAt).length;
   const priIcon = {high:'🔴',medium:'🟡',low:'🔵'};
@@ -1438,6 +1488,7 @@ function renderBacklog() {
     if(c.carried) chips.push(`<span class="text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-md border border-amber-200" title="Planned for an earlier period and still open">↪ carried</span>`);
     if(done) chips.push(`<span class="text-xs text-green-700">✓ ${fmtShort(P.localDate(item.completedAt))}</span>`);
     if(assignee) chips.push(`<span class="text-xs text-indigo-400">→ ${esc(assignee.name)}</span>`);
+    if(hours[item.id]) chips.push(hrsChip(item.id));
     const vb = visibilityBadge(item.visibility); if(vb) chips.push(vb);
     const btn = (col, label, title, cls) => `<button onclick="event.stopPropagation();moveBacklogItem('${item.id}','${col}')" title="${title}" class="text-xs px-1.5 py-0.5 rounded border font-medium whitespace-nowrap ${cls}">${label}</button>`;
     const actions = !canEdit ? '' :
@@ -1469,6 +1520,7 @@ function renderBacklog() {
       <span class="truncate ${done?'text-gray-400':'text-gray-800'}">${esc(item.title)}</span>
       ${showProject&&c.projectName?`<span class="text-xs text-gray-400 truncate flex-shrink-[2]">· ${esc(c.projectName)}</span>`:''}
       <span class="ml-auto flex items-center gap-1 flex-shrink-0">
+        ${hrsChip(item.id)}
         ${c.carried?'<span class="text-xs text-amber-600" title="Carried over from an earlier period">↪</span>':''}
         ${c.chip&&!c.carried?`<span class="text-xs text-sky-700">📅 ${esc(c.chip)}</span>`:''}
         ${due}
@@ -2156,6 +2208,7 @@ function showBacklogModal(id=null, prefill=null) {
   const pre=item||prefill||{};
   const selPr=(v)=>(item?.priority||'medium')===v?'selected':'';
   const selRf=(v)=>(item?.recurFrequency||'weekly')===v?'selected':'';
+  const loggedHrs = item ? (TempoPlanning.hoursByItem(DB.time())[item.id] || 0) : 0;
   const view = boardView();
   const viewTitle = TempoPlanning.periodTitle(view.unit, view.start, todayStr());
   const where = item ? (() => {
@@ -2233,7 +2286,7 @@ function showBacklogModal(id=null, prefill=null) {
       </div>
       ${item?`
       <div class="flex items-center justify-between pt-1 pb-1">
-        <span class="text-xs text-gray-400">${where.text}</span>
+        <span class="text-xs text-gray-400">${where.text}${loggedHrs?` · ⏱ ${fmtHours(loggedHrs)} logged`:''}</span>
         <div class="flex gap-2">
           ${where.col!=='backlog'?`<button onclick="closeModal();moveBacklogItem('${item.id}','backlog')" class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg font-medium">← Backlog</button>`:''}
           ${where.col!=='plan'?`<button onclick="closeModal();moveBacklogItem('${item.id}','plan')" class="text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 px-3 py-1.5 rounded-lg font-medium border border-teal-100">→ ${esc(viewTitle)}</button>`:''}

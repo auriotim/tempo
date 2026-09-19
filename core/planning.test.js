@@ -69,4 +69,20 @@ const seeded = P.buildBoard({
 assert.deepEqual(seeded.lanes.map((l) => [l.name, l.total, l.subs.map((s) => s.name).join()]), [['Sesame', 0, 'General'], ['URWay', 0, 'Lab']]);
 assert.equal(seeded.view.title, 'This Month');
 
+// Time against backlog items
+assert.deepEqual(P.hoursByItem([{ backlogItemId: 'x', hours: 1.5 }, { backlogItemId: 'x', hours: 0.5 }, { hours: 3 }]), { x: 2 });
+const sugg = P.timeSuggestions({
+  items: [
+    { id: 's1', title: 'Backlog thing', clientId: 'c1', archivedAt: null },
+    { id: 's2', title: 'Planned thing', clientId: 'c1', archivedAt: null, weekOf: '2026-09-14' },
+    { id: 's3', title: 'Done thing', clientId: 'c1', archivedAt: now, completedAt: now },
+    { id: 's4', title: 'Old done', clientId: 'c1', archivedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:00Z' },
+    { id: 's5', title: 'Other client', clientId: 'c2', archivedAt: null },
+    { id: 's6', title: 'Shelved', clientId: 'c1', archivedAt: now },
+  ],
+  clientId: 'c1', today, nowIso: now,
+});
+assert.deepEqual(sugg.map((s) => s.item.id), ['s2', 's1', 's3']);
+assert.deepEqual(P.timeSuggestions({ items: [{ id: 'a', title: 'Alpha', clientId: 'c1', archivedAt: null }], clientId: 'c1', query: 'LPH', today, nowIso: now }).length, 1);
+
 console.log('planning core: all tests pass');

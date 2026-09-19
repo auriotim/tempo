@@ -262,8 +262,37 @@
     };
   }
 
+  // ── Time against backlog items ──────────────────────────────────────────────
+
+  /** Total logged hours per backlog item id (entries carry backlogItemId). */
+  function hoursByItem(entries) {
+    const out = {};
+    for (const e of entries) if (e.backlogItemId) out[e.backlogItemId] = (out[e.backlogItemId] || 0) + (+e.hours || 0);
+    return out;
+  }
+
+  /**
+   * Backlog items to offer when logging time for a client: open items plus
+   * those completed this week, filtered by project (if chosen) and by a
+   * title substring. Ranked: this week's plan (incl. carried), then backlog
+   * by urgency, then recently done.
+   */
+  function timeSuggestions({ items, clientId, projectId, query, today, nowIso, limit = 8 }) {
+    const week = period('week', periodStart('week', today));
+    const q = (query || '').trim().toLowerCase();
+    const rank = { plan: 0, backlog: 1, done: 2 };
+    return items
+      .filter((i) => i.clientId === clientId && (!projectId || i.projectId === projectId))
+      .filter((i) => !q || String(i.title).toLowerCase().includes(q))
+      .map((i) => ({ item: i, column: classify(i, week, today).column || (isActive(i) ? 'backlog' : null) }))
+      .filter((s) => s.column)
+      .sort((a, b) => rank[a.column] - rank[b.column] || sortScore(a.item, today, nowIso) - sortScore(b.item, today, nowIso))
+      .slice(0, limit);
+  }
+
   return {
     UNITS, UNIT_NAME, COLUMNS,
+    hoursByItem, timeSuggestions,
     ymd, parse, addDays, localDate,
     periodStart, periodEnd, shiftPeriod, period, contains, periodLabel, periodTitle, periodOffset, planChip,
     itemPlan, isDone, isActive, withPlan, withoutPlan, nextRecurDate, completeItem, reopenItem, moveItem,
