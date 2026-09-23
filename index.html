@@ -78,7 +78,7 @@
     .bcard[draggable="true"] { cursor: grab; }
     .bcard-att { border-color: #FCD34D; background: #FFFBEB; }
     .bcard-done { background: transparent; border-color: #EEF0F2; }
-    .dash-dd { position: absolute; top: 100%; left: 0; min-width: 340px; background: white; border: 1px solid #D1D5DB; border-radius: 0.4rem; z-index: 50; max-height: 260px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 2px; }
+    .dash-dd { position: fixed; min-width: 340px; background: white; border: 1px solid #D1D5DB; border-radius: 0.4rem; z-index: 50; max-height: 260px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-top: 2px; }
     .dash-dd-head { font-size: 0.7rem; color: #9CA3AF; padding: 6px 12px 4px; border-bottom: 1px solid #F3F4F6; }
     .dash-dd-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid #F9FAFB; }
     .dash-dd-row:hover { background: #F0FDFA; }
@@ -1096,6 +1096,7 @@ function dashTaskInput(key, clientId) {
     query: link.value ? '' : whatEl.value, today: todayStr(), nowIso: new Date().toISOString(),
   });
   if(!matches.length) { dd.style.display = 'none'; return; }
+  dashPlaceDropdown(whatEl, dd);
   window._dashTaskMatches = matches;
   const tag = { plan:'<span class="text-teal-600">this week</span>', backlog:'<span class="text-gray-400">backlog</span>' };
   dd.innerHTML = `<div class="dash-dd-head">Log against a backlog item — or just type</div>` + matches.map((m,i) => {
@@ -1105,8 +1106,28 @@ function dashTaskInput(key, clientId) {
       <span class="text-xs ml-auto flex-shrink-0 flex gap-1.5">${proj?`<span class="text-gray-400">${esc(proj.name)}</span>`:''}${tag[m.column]}</span>
     </div>`;
   }).join('');
-  dd.style.display = 'block';
+  dashPlaceDropdown(whatEl, dd);   // after the content, so its height is known
 }
+/** Anchor the fixed dropdown under the field, flipping above it near the bottom. */
+function dashPlaceDropdown(input, dd) {
+  const r = input.getBoundingClientRect();
+  dd.style.display = 'block';
+  dd.style.width = Math.max(r.width, 340) + 'px';
+  dd.style.left = Math.min(r.left, window.innerWidth - dd.offsetWidth - 8) + 'px';
+  const below = window.innerHeight - r.bottom;
+  if(below < Math.min(dd.offsetHeight, 260) + 8 && r.top > below) {
+    dd.style.top = ''; dd.style.bottom = (window.innerHeight - r.top + 2) + 'px';
+  } else {
+    dd.style.bottom = ''; dd.style.top = (r.bottom + 2) + 'px';
+  }
+  if(!dd._anchored) {
+    dd._anchored = true;
+    // Scrolling moves the field out from under the list; resizing just re-anchors it.
+    window.addEventListener('scroll', () => { dd.style.display = 'none'; }, true);
+    window.addEventListener('resize', () => { if(dd.style.display === 'block') dashPlaceDropdown(input, dd); });
+  }
+}
+
 function dashTaskPick(key, idx) {
   const m = (window._dashTaskMatches || [])[idx];
   if(!m) return;
